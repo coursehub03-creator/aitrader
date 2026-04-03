@@ -50,6 +50,11 @@ def main() -> None:
             lookahead_bars=int(settings.get("learning.lookahead_bars", 8)),
             min_history_bars=int(settings.get("learning.min_history_bars", 120)),
             step=int(settings.get("learning.backtest_step", 10)),
+            search_method=str(settings.get("learning.search_method", "grid")),
+            random_search_trials=int(settings.get("learning.random_search_trials", 20)),
+            min_validation_trades=int(settings.get("learning.min_validation_trades", 2)),
+            min_forward_trades=int(settings.get("learning.min_forward_trades", 2)),
+            report_dir=str(settings.get("learning.optimization_report_dir", "logs/optimization")),
         ),
     )
 

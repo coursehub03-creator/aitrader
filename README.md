@@ -24,7 +24,7 @@ A production-ready Python project for **AI-assisted trading recommendations** us
 - Paper trade simulator
 - Structured paper-trade persistence (CSV/SQLite)
 - Strategy evaluator and leaderboard with risk filters
-- Grid-search parameter optimizer
+- Self-optimization layer with grid/randomized search, train/validation/forward scoring, and anti-overfit ranking
 - Modular architecture for long-term development
 
 ## Architecture
@@ -78,3 +78,16 @@ tests/              # Unit tests
   - expectancy
 - Leaderboard excludes strategies that have too few trades (`min_trades`) or too
   much drawdown (`max_drawdown_limit`).
+
+
+## Self-Optimization Layer
+
+- `learning.optimizer.ParameterOptimizer` supports `grid` and `randomized` parameter search.
+- Each parameter set is evaluated using three stages:
+  - training window
+  - validation window
+  - forward (paper-like) window
+- Final ranking uses a robustness score weighted toward validation and forward performance, with an explicit overfitting penalty (`|train - validation|`).
+- The optimizer stores top parameter candidates and writes JSON reports to `learning.optimization_report_dir` (default: `logs/optimization`).
+- After each optimization cycle, only the best 2-3 strategies are activated (`learning.active_strategy_count`).
+- Reports include the winning parameter sets and rationale for why they were selected.

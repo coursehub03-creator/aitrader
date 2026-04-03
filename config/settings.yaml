@@ -34,6 +34,12 @@ learning:
   lookahead_bars: 8
   min_history_bars: 120
   backtest_step: 10
+  search_method: grid
+  random_search_trials: 20
+  min_validation_trades: 2
+  min_forward_trades: 2
+  active_strategy_count: 2
+  optimization_report_dir: logs/optimization
   parameter_grid:
     trend_rsi:
       ema_fast: [10, 20]
