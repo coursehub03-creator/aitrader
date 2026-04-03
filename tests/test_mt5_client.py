@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import time
 from types import SimpleNamespace
 
 import pandas as pd
@@ -35,7 +36,8 @@ class FakeMT5:
         if symbol == "MISSING":
             return None
         visible = symbol in self.selected
-        return SimpleNamespace(visible=visible)
+        trade_mode = 1 if symbol != "NOT_TRADABLE" else 0
+        return SimpleNamespace(visible=visible, trade_mode=trade_mode)
 
     def symbol_select(self, symbol: str, visible: bool) -> bool:
         if symbol == "LOCKED":
@@ -53,9 +55,10 @@ class FakeMT5:
         if symbol == "EMPTY":
             return None
 
+        base_time = int(time.time()) if symbol != "STALE" else 1_700_000_000
         return [
             {
-                "time": 1_700_000_000 + i * 60,
+                "time": base_time + i * 60,
                 "open": 1.1 + i * 0.0001,
                 "high": 1.2 + i * 0.0001,
                 "low": 1.0 + i * 0.0001,
@@ -65,6 +68,25 @@ class FakeMT5:
             }
             for i in range(count)
         ]
+
+    def symbol_info_tick(self, symbol: str) -> SimpleNamespace | None:
+        if symbol == "STALE":
+            return SimpleNamespace(time=1_700_000_000)
+        return SimpleNamespace(time=int(time.time()))
+
+
+class _RetryMT5(FakeMT5):
+    def __init__(self, fail_attempts: int) -> None:
+        super().__init__()
+        self.fail_attempts = fail_attempts
+        self.calls = 0
+
+    def initialize(self, **_: object) -> bool:
+        self.calls += 1
+        if self.calls <= self.fail_attempts:
+            return False
+        self.initialized = True
+        return True
 
 
 def test_initialize_symbols_and_fetch(monkeypatch) -> None:
@@ -111,3 +133,35 @@ def test_fetch_multi_timeframe_rates(monkeypatch) -> None:
 def test_timeframe_roundtrip() -> None:
     assert MT5Client.timeframe_to_mt5_constant("M5") == 5
     assert MT5Client.mt5_constant_to_timeframe(16385) == "H1"
+
+
+def test_detect_market_status_variants(monkeypatch) -> None:
+    fake_mt5 = FakeMT5()
+    fake_mt5.SYMBOL_TRADE_MODE_DISABLED = 0
+    monkeypatch.setattr(mt5_module, "mt5", fake_mt5)
+
+    client = MT5Client()
+    assert client.initialize()
+
+    assert client.detect_market_status("EURUSD", "M5")[0] == "open"
+    assert client.detect_market_status("STALE", "M5")[0] == "closed"
+    assert client.detect_market_status("MISSING", "M5")[0] == "unavailable"
+    assert client.detect_market_status("NOT_TRADABLE", "M5")[0] == "unavailable"
+
+
+def test_detect_market_status_mt5_unavailable(monkeypatch) -> None:
+    fake_mt5 = FakeMT5()
+    monkeypatch.setattr(mt5_module, "mt5", fake_mt5)
+
+    client = MT5Client()
+    status, _reason = client.detect_market_status("EURUSD", "M5")
+    assert status == "mt5_unavailable"
+
+
+def test_initialize_retries(monkeypatch) -> None:
+    fake_mt5 = _RetryMT5(fail_attempts=2)
+    monkeypatch.setattr(mt5_module, "mt5", fake_mt5)
+
+    client = MT5Client(init_retries=3, retry_delay_seconds=0.0)
+    assert client.initialize()
+    assert fake_mt5.calls == 3

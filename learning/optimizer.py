@@ -45,6 +45,7 @@ class OptimizationResult:
     tested_combinations: int
     selected_candidates: list[ParameterSetScore]
     report_path: str
+    best_expectancy: float = 0.0
 
 
 class ParameterOptimizer:
@@ -134,6 +135,7 @@ class ParameterOptimizer:
             strategy_name=strategy.name,
             best_params=best.params,
             best_score=best.robustness_score,
+            best_expectancy=(best.forward.net_pnl / best.forward.trades) if best.forward.trades else 0.0,
             tested_combinations=len(combos),
             selected_candidates=selected_candidates,
             report_path=str(report_path),

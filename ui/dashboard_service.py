@@ -44,6 +44,7 @@ class DashboardService:
             "symbol": recommendation.symbol,
             "timeframe": recommendation.timeframe,
             "market_status": recommendation.market_status,
+            "mt5_connection_status": recommendation.mt5_connection_status,
             "news_status": recommendation.news_status,
             "selected_strategy": recommendation.selected_strategy,
             "action": action,
@@ -56,7 +57,7 @@ class DashboardService:
         }
 
     def connection_status(self, symbol: str, timeframe: str) -> tuple[str, str]:
-        mt5 = MT5Client()
+        mt5 = self._build_mt5_client()
         mt5.connect()
         try:
             if not mt5.connected:
@@ -83,6 +84,7 @@ class DashboardService:
                 selected_strategy="none",
                 market_status="mt5_unavailable",
                 news_status="unknown",
+                mt5_connection_status="unavailable",
                 reasons=[f"Runtime error while generating recommendation: {exc}"],
                 timestamp=datetime.utcnow(),
             )
@@ -108,7 +110,7 @@ class DashboardService:
         return frame.tail(limit).iloc[::-1].reset_index(drop=True)
 
     def refresh_market_data(self, symbol: str, timeframe: str, bars: int = 300) -> tuple[pd.DataFrame, str]:
-        mt5 = MT5Client()
+        mt5 = self._build_mt5_client()
         mt5.connect()
         try:
             if not mt5.connected:
@@ -121,7 +123,7 @@ class DashboardService:
             mt5.shutdown()
 
     def run_optimizer(self, symbol: str, timeframe: str) -> pd.DataFrame:
-        mt5 = MT5Client()
+        mt5 = self._build_mt5_client()
         mt5.connect()
         try:
             if not mt5.connected:
@@ -158,7 +160,7 @@ class DashboardService:
             mt5.shutdown()
 
     def simulate_paper_trade_cycle(self, symbol: str, timeframe: str) -> tuple[pd.DataFrame, str]:
-        mt5 = MT5Client()
+        mt5 = self._build_mt5_client()
         mt5.connect()
         try:
             if not mt5.connected:
@@ -230,3 +232,13 @@ class DashboardService:
         if not scores:
             return pd.DataFrame()
         return pd.DataFrame([asdict(score) for score in scores])
+
+    def _build_mt5_client(self) -> MT5Client:
+        return MT5Client(
+            terminal_path=self.settings.get("mt5.terminal_path"),
+            login=self.settings.get("mt5.login"),
+            password=self.settings.get("mt5.password"),
+            server=self.settings.get("mt5.server"),
+            init_retries=int(self.settings.get("mt5.init_retries", 3)),
+            retry_delay_seconds=float(self.settings.get("mt5.retry_delay_seconds", 0.5)),
+        )

@@ -2,6 +2,14 @@ app:
   log_level: INFO
   data_bars: 500
 
+mt5:
+  terminal_path: null
+  login: null
+  password: null
+  server: null
+  init_retries: 3
+  retry_delay_seconds: 0.5
+
 news:
   provider: forexfactory
   endpoint: https://nfs.faireconomy.media/ff_calendar_thisweek.json

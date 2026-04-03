@@ -57,6 +57,7 @@ def _recommendation_to_dict(recommendation: Any) -> dict[str, Any]:
         "timeframe": recommendation.timeframe,
         "timestamp": recommendation.timestamp.replace(tzinfo=timezone.utc).isoformat(),
         "market_status": recommendation.market_status,
+        "mt5_connection_status": getattr(recommendation, "mt5_connection_status", "unknown"),
         "news_status": recommendation.news_status,
         "selected_strategy": recommendation.selected_strategy,
         "action": action,
@@ -91,8 +92,16 @@ def _persist_cycle_result(
 
 
 def build_engine(settings: Any) -> RecommendationEngine:
+    mt5_client = MT5Client(
+        terminal_path=settings.get("mt5.terminal_path"),
+        login=settings.get("mt5.login"),
+        password=settings.get("mt5.password"),
+        server=settings.get("mt5.server"),
+        init_retries=int(settings.get("mt5.init_retries", 3)),
+        retry_delay_seconds=float(settings.get("mt5.retry_delay_seconds", 0.5)),
+    )
     return RecommendationEngine(
-        mt5_client=MT5Client(),
+        mt5_client=mt5_client,
         news_provider=build_news_provider(settings),
         news_filter=NewsFilter(
             before_minutes=int(settings.get("news.high_impact_cooldown_before_min", 30)),

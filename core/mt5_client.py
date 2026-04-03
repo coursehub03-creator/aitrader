@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 import os
+import time
 from datetime import datetime
 from typing import Any
 
@@ -40,9 +41,23 @@ FALLBACK_TIMEFRAME_VALUES = {
 class MT5Client:
     """Thin MT5 wrapper that never crashes app when MT5 is unavailable."""
 
-    def __init__(self) -> None:
+    def __init__(
+        self,
+        terminal_path: str | None = None,
+        login: int | None = None,
+        password: str | None = None,
+        server: str | None = None,
+        init_retries: int = 3,
+        retry_delay_seconds: float = 0.5,
+    ) -> None:
         self.connected = False
         self.status_message = "MT5 client not initialized"
+        self.terminal_path = terminal_path
+        self.login = login
+        self.password = password
+        self.server = server
+        self.init_retries = max(1, int(init_retries))
+        self.retry_delay_seconds = max(0.0, float(retry_delay_seconds))
 
     def initialize(self) -> bool:
         """Initialize MT5 terminal connection and keep a human-readable status."""
@@ -56,25 +71,36 @@ class MT5Client:
             return False
 
         kwargs: dict[str, Any] = {}
-        if os.getenv("MT5_PATH"):
-            kwargs["path"] = os.getenv("MT5_PATH")
-        if os.getenv("MT5_LOGIN"):
-            kwargs["login"] = int(os.getenv("MT5_LOGIN", "0"))
-            kwargs["password"] = os.getenv("MT5_PASSWORD")
-            kwargs["server"] = os.getenv("MT5_SERVER")
+        configured_path = self.terminal_path or os.getenv("MT5_PATH")
+        configured_login = self.login if self.login is not None else int(os.getenv("MT5_LOGIN", "0") or 0)
+        configured_password = self.password if self.password is not None else os.getenv("MT5_PASSWORD")
+        configured_server = self.server if self.server is not None else os.getenv("MT5_SERVER")
+        if configured_path:
+            kwargs["path"] = configured_path
+        if configured_login:
+            kwargs["login"] = configured_login
+            kwargs["password"] = configured_password
+            kwargs["server"] = configured_server
 
-        try:
-            self.connected = bool(mt5.initialize(**kwargs))
-        except Exception as exc:  # pragma: no cover - defensive layer
-            self.connected = False
-            self.status_message = f"MT5 initialize call failed: {exc}"
-            LOGGER.exception(self.status_message)
-            return False
+        for attempt in range(1, self.init_retries + 1):
+            try:
+                self.connected = bool(mt5.initialize(**kwargs))
+            except Exception as exc:  # pragma: no cover - defensive layer
+                self.connected = False
+                self.status_message = f"MT5 initialize call failed: {exc}"
+                LOGGER.exception(self.status_message)
+            if self.connected:
+                break
+
+            err = mt5.last_error()
+            self.status_message = (
+                f"Failed to initialize MT5 terminal (attempt {attempt}/{self.init_retries}): {err}"
+            )
+            LOGGER.warning(self.status_message)
+            if attempt < self.init_retries:
+                time.sleep(self.retry_delay_seconds)
 
         if not self.connected:
-            err = mt5.last_error()
-            self.status_message = f"Failed to initialize MT5 terminal: {err}"
-            LOGGER.warning(self.status_message)
             return False
 
         self.status_message = "Connected to MT5 terminal"

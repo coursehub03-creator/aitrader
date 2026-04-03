@@ -279,6 +279,84 @@ def test_final_recommendation_has_operator_output_fields() -> None:
         "selected_strategy",
         "market_status",
         "news_status",
+        "mt5_connection_status",
         "reasons",
         "timestamp",
     }
+
+
+def test_strategy_score_expectancy_defaults_to_zero() -> None:
+    score = StrategyScore(
+        strategy_name="trend_rsi",
+        score=1.5,
+        net_pnl=10.0,
+        trades=3,
+        max_drawdown=0.5,
+        win_rate=0.66,
+        loss_rate=0.33,
+        average_pnl=3.33,
+        profit_factor=1.4,
+    )
+    assert score.expectancy == 0.0
+
+
+def test_strategy_score_accepts_all_expected_fields() -> None:
+    score = StrategyScore(
+        strategy_name="breakout_atr",
+        score=2.0,
+        net_pnl=5.0,
+        trades=10,
+        max_drawdown=1.2,
+        win_rate=0.6,
+        loss_rate=0.4,
+        average_pnl=0.5,
+        profit_factor=1.8,
+        expectancy=0.5,
+    )
+    assert score.expectancy == 0.5
+
+
+def test_generate_does_not_crash_when_optimizer_has_no_trade_history() -> None:
+    engine = _build_engine_with_market_status("open", "market is open")
+    strategy = type(
+        "S",
+        (),
+        {
+            "name": "trend_rsi",
+            "generate_signal": lambda self, candles, params: StrategySignal(
+                "trend_rsi",
+                SignalAction.BUY,
+                1.11,
+                1.1,
+                1.13,
+                0.7,
+                ["test signal"],
+            ),
+        },
+    )()
+    engine.strategies = [strategy]
+    engine.settings = {
+        "app.data_bars": 50,
+        "learning.optimization_enabled": True,
+        "learning.active_strategy_count": 1,
+        "learning.parameter_grid": {},
+    }
+    engine.optimizer = type(
+        "Opt",
+        (),
+        {
+            "optimize": lambda self, *_args, **_kwargs: OptimizationResult(
+                strategy_name="trend_rsi",
+                best_params={},
+                best_score=1.0,
+                tested_combinations=1,
+                selected_candidates=[],
+                report_path="logs/mock_report.json",
+            )
+        },
+    )()
+
+    rec = engine.generate("EURUSD", "M5")
+
+    assert rec.action == SignalAction.BUY
+    assert rec.market_status == "open"
