@@ -95,7 +95,7 @@ class RecommendationEngine:
 
                 if opt is not None:
                     params = opt.best_params
-                    score = StrategyScore(strategy.name, opt.best_score, 0.0, 0, 0.0, 0.0, 0.0)
+                    score = StrategyScore(strategy.name, opt.best_score, 0.0, 0, 0.0, 0.0, 0.0, 0.0, 0.0)
 
             signal = strategy.generate_signal(candles, params)
             if signal.action == SignalAction.NO_TRADE:

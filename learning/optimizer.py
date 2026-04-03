@@ -28,7 +28,7 @@ class ParameterOptimizer:
         self.min_history_bars = min_history_bars
         self.step = step
         self.paper_trader = PaperTrader()
-        self.evaluator = PerformanceEvaluator()
+        self.evaluator = PerformanceEvaluator(min_trades=1, max_drawdown_limit=float("inf"))
 
     def optimize(
         self,
