@@ -44,13 +44,14 @@ class RecommendationEngine:
 
     def generate(self, symbol: str, timeframe: str) -> FinalRecommendation:
         run_timestamp = datetime.utcnow()
+        market_price = 0.0
         self.mt5.connect()
         try:
             if not self.mt5.connected:
-                return self._no_trade(symbol, timeframe, self.mt5.status_message, "unavailable", run_timestamp)
+                return self._no_trade(symbol, timeframe, self.mt5.status_message, "blocked", run_timestamp, market_price)
 
             if not self.mt5.ensure_symbol(symbol):
-                return self._no_trade(symbol, timeframe, self.mt5.status_message, "unavailable", run_timestamp)
+                return self._no_trade(symbol, timeframe, self.mt5.status_message, "blocked", run_timestamp, market_price)
 
             candles = self.mt5.get_ohlcv(
                 symbol,
@@ -59,11 +60,12 @@ class RecommendationEngine:
             )
             if candles.empty:
                 reason = self.mt5.status_message or f"No market data for {symbol}/{timeframe}"
-                return self._no_trade(symbol, timeframe, reason, "unavailable", run_timestamp)
+                return self._no_trade(symbol, timeframe, reason, "blocked", run_timestamp, market_price)
+            market_price = float(candles.iloc[-1]["close"])
 
             blocked, news_status, reason, confidence_multiplier = self._news_gate(symbol)
             if blocked:
-                return self._no_trade(symbol, timeframe, reason, news_status, run_timestamp)
+                return self._no_trade(symbol, timeframe, reason, news_status, run_timestamp, market_price)
 
             strategy_outputs = self._run_strategies(symbol, candles)
             if not strategy_outputs:
@@ -73,12 +75,14 @@ class RecommendationEngine:
                     "No strategy produced an actionable signal",
                     news_status,
                     run_timestamp,
+                    market_price,
                 )
 
             recommendation = self._aggregate(
                 symbol,
                 timeframe,
                 strategy_outputs,
+                market_price,
                 confidence_multiplier,
                 news_status,
                 run_timestamp,
@@ -182,20 +186,22 @@ class RecommendationEngine:
 
         if decision.decision == "block trading":
             LOGGER.info("Recommendation blocked by news filter: %s", decision.reason)
-            return True, decision.decision, decision.reason, decision.confidence_multiplier
+            return True, "blocked", decision.reason, decision.confidence_multiplier
 
         if decision.decision == "reduce confidence":
             LOGGER.info("Recommendation confidence reduced by news filter: %s", decision.reason)
+            return False, "reduced_confidence", decision.reason, decision.confidence_multiplier
 
-        return False, decision.decision, decision.reason, decision.confidence_multiplier
+        return False, "clear", decision.reason, decision.confidence_multiplier
 
     def _aggregate(
         self,
         symbol: str,
         timeframe: str,
         strategy_outputs: list[tuple[StrategySignal, StrategyScore | None]],
+        market_price: float,
         confidence_multiplier: float = 1.0,
-        news_status: str = "allow trading",
+        news_status: str = "clear",
         timestamp: datetime | None = None,
     ) -> FinalRecommendation:
         buys = [item for item in strategy_outputs if item[0].action == SignalAction.BUY]
@@ -208,6 +214,7 @@ class RecommendationEngine:
                 "Conflicting strategy directions",
                 news_status,
                 timestamp or datetime.utcnow(),
+                market_price,
             )
 
         selected = buys if buys else sells
@@ -258,17 +265,27 @@ class RecommendationEngine:
                 if excluded_names
                 else "No strategies available after aggregation"
             )
-            return self._no_trade(symbol, timeframe, reason, news_status, timestamp or datetime.utcnow())
+            return self._no_trade(symbol, timeframe, reason, news_status, timestamp or datetime.utcnow(), market_price)
+
+        avg_entry = float(sum(entry_vals) / len(entry_vals))
+        avg_sl = float(sum(sl_vals) / len(sl_vals))
+        avg_tp = float(sum(tp_vals) / len(tp_vals))
+        risk = abs(avg_entry - avg_sl)
+        reward = abs(avg_tp - avg_entry)
+        risk_reward_ratio = float(reward / risk) if risk > 0 else 0.0
 
         return FinalRecommendation(
             symbol=symbol,
             timeframe=timeframe,
             final_action=selected[0][0].action,
-            entry=float(sum(entry_vals) / len(entry_vals)),
-            stop_loss=float(sum(sl_vals) / len(sl_vals)),
-            take_profit=float(sum(tp_vals) / len(tp_vals)),
+            market_price=market_price,
+            entry=avg_entry,
+            stop_loss=avg_sl,
+            take_profit=avg_tp,
+            risk_reward_ratio=risk_reward_ratio,
             confidence=float((confidence_weighted / weight_total) * confidence_multiplier),
             strategy_name=names[0] if len(names) == 1 else "+".join(names),
+            selected_strategy_name=names[0] if len(names) == 1 else "+".join(names),
             news_status=news_status,
             reasons=reasons,
             timestamp=timestamp or datetime.utcnow(),
@@ -281,16 +298,20 @@ class RecommendationEngine:
         reason: str,
         news_status: str,
         timestamp: datetime,
+        market_price: float,
     ) -> FinalRecommendation:
         return FinalRecommendation(
             symbol=symbol,
             timeframe=timeframe,
             final_action=SignalAction.NO_TRADE,
+            market_price=market_price,
             entry=0.0,
             stop_loss=0.0,
             take_profit=0.0,
+            risk_reward_ratio=0.0,
             confidence=0.0,
             strategy_name="none",
+            selected_strategy_name="none",
             news_status=news_status,
             reasons=[reason],
             timestamp=timestamp,
@@ -299,20 +320,20 @@ class RecommendationEngine:
     @staticmethod
     def format_for_terminal(recommendation: FinalRecommendation) -> str:
         lines = [
-            "=== Final Recommendation ===",
-            f"Symbol:      {recommendation.symbol}",
-            f"Timeframe:   {recommendation.timeframe}",
-            f"Action:      {recommendation.final_action}",
-            f"Entry:       {recommendation.entry:.5f}",
-            f"Stop Loss:   {recommendation.stop_loss:.5f}",
-            f"Take Profit: {recommendation.take_profit:.5f}",
-            f"Confidence:  {recommendation.confidence:.2%}",
-            f"Strategy:    {recommendation.strategy_name}",
-            f"News:        {recommendation.news_status}",
-            f"Timestamp:   {recommendation.timestamp.isoformat()}",
-            "Reasons:",
+            "╔══════════════════════════ FINAL RECOMMENDATION ══════════════════════════╗",
+            f"║ Symbol/TF         : {recommendation.symbol}/{recommendation.timeframe}",
+            f"║ Action            : {recommendation.final_action}",
+            f"║ Market Price      : {recommendation.market_price:.5f}",
+            f"║ Entry / SL / TP   : {recommendation.entry:.5f} / {recommendation.stop_loss:.5f} / {recommendation.take_profit:.5f}",
+            f"║ Risk/Reward       : {recommendation.risk_reward_ratio:.2f}",
+            f"║ Confidence        : {recommendation.confidence:.2%}",
+            f"║ Selected Strategy : {recommendation.selected_strategy_name}",
+            f"║ News Status       : {recommendation.news_status}",
+            f"║ Timestamp (UTC)   : {recommendation.timestamp.isoformat()}",
+            "╠════════════════════════════════ REASONS ══════════════════════════════════╣",
         ]
-        lines.extend([f"  - {reason}" for reason in recommendation.reasons] or ["  - n/a"])
+        lines.extend([f"║  • {reason}" for reason in recommendation.reasons] or ["║  • n/a"])
+        lines.append("╚════════════════════════════════════════════════════════════════════════════╝")
         return "\n".join(lines)
 
     def _persist_signal(self, symbol: str, signal: StrategySignal) -> None:

@@ -88,11 +88,14 @@ class FinalRecommendation:
     symbol: str
     timeframe: str
     final_action: str
+    market_price: float
     entry: float
     stop_loss: float
     take_profit: float
+    risk_reward_ratio: float
     confidence: float
     strategy_name: str
+    selected_strategy_name: str
     news_status: str
     reasons: list[str] = field(default_factory=list)
     timestamp: datetime = field(default_factory=datetime.utcnow)
