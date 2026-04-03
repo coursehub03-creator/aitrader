@@ -1,0 +1,42 @@
+app:
+  log_level: INFO
+  data_bars: 500
+
+news:
+  provider: forexfactory
+  endpoint: https://nfs.faireconomy.media/ff_calendar_thisweek.json
+  high_impact_cooldown_before_min: 30
+  high_impact_cooldown_after_min: 30
+  symbols_map:
+    EURUSD: [EUR, USD]
+    GBPUSD: [GBP, USD]
+    USDJPY: [USD, JPY]
+
+strategy:
+  trend_rsi:
+    ema_fast: 20
+    ema_slow: 50
+    rsi_period: 14
+    rsi_buy_threshold: 55
+    rsi_sell_threshold: 45
+  breakout_atr:
+    breakout_lookback: 20
+    atr_period: 14
+    atr_sl_multiplier: 1.5
+    atr_tp_multiplier: 2.5
+
+learning:
+  optimization_enabled: true
+  lookahead_bars: 8
+  min_history_bars: 120
+  backtest_step: 10
+  parameter_grid:
+    trend_rsi:
+      ema_fast: [10, 20]
+      ema_slow: [40, 50, 60]
+      rsi_buy_threshold: [52, 55, 58]
+      rsi_sell_threshold: [42, 45, 48]
+    breakout_atr:
+      breakout_lookback: [15, 20, 30]
+      atr_sl_multiplier: [1.0, 1.5, 2.0]
+      atr_tp_multiplier: [2.0, 2.5, 3.0]
