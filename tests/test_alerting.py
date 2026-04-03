@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import datetime, timedelta, timezone
 
 from core.types import FinalRecommendation, SignalAction
-from monitoring.alerts import AlertCooldownStore, AlertPolicy
+from monitoring.alerts import AlertCooldownStore, AlertHistoryStore, AlertPolicy
 from notification.telegram_notifier import TelegramConfig, TelegramNotifier
 
 
@@ -88,6 +88,32 @@ def test_cooldown_allows_after_expiry(tmp_path) -> None:
     assert reason == "cooldown_elapsed"
 
 
+def test_duplicate_history_suppresses_identical_alerts(tmp_path) -> None:
+    history = AlertHistoryStore(tmp_path / "sent.jsonl", duplicate_window_seconds=1200)
+    rec = _recommendation(action=SignalAction.BUY)
+    now = datetime(2026, 1, 1, tzinfo=timezone.utc)
+
+    can_send, reason, _ = history.suppress_duplicate(rec, now)
+    assert can_send is True
+    assert reason == "history_clear"
+
+    history.mark_sent(rec, now)
+    can_send2, reason2, _ = history.suppress_duplicate(rec, now + timedelta(minutes=5))
+    assert can_send2 is False
+    assert reason2 == "duplicate_suppressed_by_history"
+
+
+def test_duplicate_history_allows_after_window(tmp_path) -> None:
+    history = AlertHistoryStore(tmp_path / "sent.jsonl", duplicate_window_seconds=60)
+    rec = _recommendation(action=SignalAction.SELL)
+    now = datetime(2026, 1, 1, tzinfo=timezone.utc)
+    history.mark_sent(rec, now)
+
+    can_send, reason, _ = history.suppress_duplicate(rec, now + timedelta(seconds=61))
+    assert can_send is True
+    assert reason == "history_clear"
+
+
 def test_no_alert_when_market_closed() -> None:
     policy = AlertPolicy(min_confidence=0.6, min_risk_reward=1.5)
     qualifies, reason = policy.qualifies(_recommendation(market_status="closed"))
@@ -117,3 +143,32 @@ def test_safe_failure_when_telegram_not_configured() -> None:
     sent, reason = notifier.send_recommendation_alert(_recommendation())
     assert sent is False
     assert reason == "telegram_not_configured"
+
+
+def test_telegram_from_settings_reads_environment(monkeypatch) -> None:
+    monkeypatch.setenv("TELEGRAM_ENABLED", "1")
+    monkeypatch.setenv("TELEGRAM_BOT_TOKEN", "env-token")
+    monkeypatch.setenv("TELEGRAM_CHAT_ID", "env-chat")
+    monkeypatch.setenv("TELEGRAM_TIMEOUT_SECONDS", "7")
+    monkeypatch.setenv("TELEGRAM_SEND_REJECTED_ALERTS", "true")
+
+    settings = type(
+        "S",
+        (),
+        {
+            "get": lambda self, key, default=None: {
+                "monitoring.telegram.enabled": False,
+                "monitoring.telegram.timeout_seconds": 10,
+                "monitoring.send_rejected_alerts": False,
+                "monitoring.send_summary_alerts": False,
+                "monitoring.telegram": {"bot_token": "", "chat_id": ""},
+            }.get(key, default)
+        },
+    )()
+    notifier = TelegramNotifier.from_settings(settings)
+
+    assert notifier.config.enabled is True
+    assert notifier.config.bot_token == "env-token"
+    assert notifier.config.chat_id == "env-chat"
+    assert notifier.config.timeout_seconds == 7.0
+    assert notifier.config.send_rejected_alerts is True

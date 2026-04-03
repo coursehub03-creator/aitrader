@@ -21,7 +21,7 @@ from learning.historical_data import HistoricalDataPipeline
 from learning.historical_validation import HistoricalValidationPipeline, format_historical_results
 from learning.persistence import LearningPersistence
 from learning.unified import UnifiedLearningScorer
-from monitoring.alerts import AlertPolicy, AlertCooldownStore
+from monitoring.alerts import AlertCooldownStore, AlertHistoryStore, AlertPolicy
 from notification.telegram_notifier import TelegramNotifier
 from recommendation.symbol_profile import profile_for_symbol
 from strategy.registry import create_default_strategies
@@ -57,6 +57,7 @@ class DashboardService:
         self.recent_recommendations_path = Path("logs/ui_recent_recommendations.csv")
         self.alert_history_path = Path("logs/ui_alert_history.csv")
         self.alert_state_path = Path("logs/ui_alert_state.json")
+        self.alert_sent_history_path = Path("logs/ui_alert_sent_history.jsonl")
         self.trade_csv_path = Path("logs/paper_trades.csv")
         self.trade_sqlite_path = Path("logs/paper_trades.sqlite3")
         self.learning_dir = Path("logs/learning")
@@ -182,16 +183,26 @@ class DashboardService:
             self.alert_state_path,
             cooldown_seconds=int(self.settings.get("monitoring.alert_cooldown_seconds", 900)),
         )
+        history = AlertHistoryStore(
+            self.alert_sent_history_path,
+            duplicate_window_seconds=int(self.settings.get("monitoring.alert_duplicate_window_seconds", 1800)),
+        )
         key = cooldown.build_key(recommendation)
-        can_send, cooldown_reason = cooldown.can_send(key, datetime.now(tz=timezone.utc))
+        now = datetime.now(tz=timezone.utc)
+        can_send, cooldown_reason = cooldown.can_send(key, now)
         if not can_send:
             LOGGER.info("Dashboard alert suppressed by cooldown for %s: %s", recommendation.symbol, cooldown_reason)
             return "suppressed", cooldown_reason, False, alert_type
+        history_ok, history_reason, _ = history.suppress_duplicate(recommendation, now)
+        if not history_ok:
+            LOGGER.info("Dashboard alert suppressed by duplicate history for %s: %s", recommendation.symbol, history_reason)
+            return "suppressed", history_reason, False, alert_type
 
         notifier = TelegramNotifier.from_settings(self.settings)
         sent, send_reason = notifier.send_recommendation_alert(recommendation, alert_type=alert_type)
         if sent:
-            cooldown.mark_sent(key, datetime.now(tz=timezone.utc))
+            cooldown.mark_sent(key, now)
+            history.mark_sent(recommendation, now)
             return "sent", send_reason, True, alert_type
         return "failed", send_reason, False, alert_type
 
