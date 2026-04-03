@@ -131,7 +131,19 @@ Learning Center reads/writes local-first persistence in `logs/learning/` and in 
 - `state/`
 - `db/`
 
-Structured records use SQLite (`db/learning.sqlite3`), active strategy/symbol profiles/best params use JSON (`state/`), and candle datasets/exports use CSV (`data/market_history/`).
+Structured records use SQLite (`db/learning.sqlite3`), active strategy/symbol profiles/best params use JSON (`state/`), and candle datasets/exports use CSV/Parquet (`data/market_history/`).
+
+##### Storage layout (robust persistence)
+
+- `data/market_history/` — historical candle datasets and exports (CSV/Parquet).
+- `data/paper_trades/` — paper-trade history exports.
+- `data/learning/` — historical validation artifacts and learning datasets.
+- `data/optimizer/` — optimizer run snapshots per symbol/timeframe.
+- `data/snapshots/` — optional periodic snapshots/checkpoints.
+- `state/` — active JSON state (`active_strategy_state.json`, `open_paper_trades.json`, `learning_health.json`), symbol profiles, and best params per symbol/timeframe.
+- `db/` — SQLite structured history (`learning.sqlite3`) for recommendations, alerts, paper history, learning health, validation, optimizer results, and lifecycle events.
+
+Persistence helpers are defensive by default: missing/empty/malformed JSON/CSV/SQLite reads return schema-correct empty payloads instead of crashing. Learned behavior is persisted only through data files (SQLite/JSON/CSV/Parquet) and **never by rewriting Python source files**.
 
 Legacy learning-center CSV snapshots remain in:
 

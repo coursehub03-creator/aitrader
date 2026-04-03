@@ -42,25 +42,31 @@ class HistoricalDataPipeline:
         if candles.empty:
             return candles, Path()
 
-        path = self.persistence.layout.market_history_dir / f"{symbol.upper()}_{timeframe.upper()}.csv"
-        if path.exists():
-            existing = pd.read_csv(path)
+        base_path = self.persistence.layout.market_history_dir / f"{symbol.upper()}_{timeframe.upper()}"
+        csv_path = base_path.with_suffix(".csv")
+        if csv_path.exists():
+            existing = self.persistence.safe_read_csv(csv_path, ["time", "open", "high", "low", "close", "volume"])
             combined = pd.concat([existing, candles], ignore_index=True)
             combined["time"] = pd.to_datetime(combined["time"], errors="coerce")
             combined = combined.dropna(subset=["time"]).drop_duplicates(subset=["time"]).sort_values("time")
         else:
             combined = candles.copy()
-        combined.to_csv(path, index=False)
-        return combined, path
+        output_path = self.persistence.safe_write_market_history(base_path, combined, prefer_parquet=False)
+        return combined, output_path
 
     def load_history(self, symbol: str, timeframe: str) -> pd.DataFrame:
-        path = self.persistence.layout.market_history_dir / f"{symbol.upper()}_{timeframe.upper()}.csv"
-        return self.persistence.safe_read_csv(path, ["time", "open", "high", "low", "close", "volume"])
+        base_path = self.persistence.layout.market_history_dir / f"{symbol.upper()}_{timeframe.upper()}"
+        csv_path = base_path.with_suffix(".csv")
+        parquet_path = base_path.with_suffix(".parquet")
+        if parquet_path.exists():
+            return self.persistence.safe_read_parquet(parquet_path, ["time", "open", "high", "low", "close", "volume"])
+        return self.persistence.safe_read_csv(csv_path, ["time", "open", "high", "low", "close", "volume"])
 
     def summary(self) -> pd.DataFrame:
         rows = []
-        for path in sorted(self.persistence.layout.market_history_dir.glob("*_*.csv")):
-            frame = self.persistence.safe_read_csv(path, ["time", "open", "high", "low", "close", "volume"])
+        files = sorted(self.persistence.layout.market_history_dir.glob("*_*.csv")) + sorted(self.persistence.layout.market_history_dir.glob("*_*.parquet"))
+        for path in files:
+            frame = self.persistence.safe_read_parquet(path, ["time", "open", "high", "low", "close", "volume"]) if path.suffix == ".parquet" else self.persistence.safe_read_csv(path, ["time", "open", "high", "low", "close", "volume"])
             if frame.empty:
                 continue
             symbol, timeframe = path.stem.split("_", 1)
