@@ -59,6 +59,7 @@ class DashboardService:
         self.monitor_cycles_path = Path("logs/ui_monitor_cycles.jsonl")
         self.alert_state_path = Path("logs/ui_alert_state.json")
         self.alert_sent_history_path = Path("logs/ui_alert_sent_history.jsonl")
+        self.telegram_test_history_path = Path("logs/ui_telegram_test_history.jsonl")
         self.trade_csv_path = Path("logs/paper_trades.csv")
         self.trade_sqlite_path = Path("logs/paper_trades.sqlite3")
         self.learning_dir = Path("logs/learning")
@@ -276,6 +277,76 @@ class DashboardService:
             history.mark_sent(recommendation, now)
             return "sent", send_reason, True, alert_type
         return "failed", send_reason, False, alert_type
+
+    def send_test_telegram_message(self) -> dict[str, Any]:
+        """Send a Telegram test message with explicit UI-safe status metadata."""
+        now_iso = datetime.now(tz=timezone.utc).isoformat(timespec="seconds")
+        try:
+            notifier = TelegramNotifier.from_settings(self.settings)
+            if not notifier.config.enabled:
+                result = {
+                    "timestamp": now_iso,
+                    "success": False,
+                    "status": "warning",
+                    "message": "Telegram is disabled in configuration",
+                    "reason": "telegram_disabled",
+                }
+                self._log_telegram_test_attempt(result)
+                return result
+
+            if not notifier.config.bot_token or not notifier.config.chat_id:
+                result = {
+                    "timestamp": now_iso,
+                    "success": False,
+                    "status": "error",
+                    "message": "Telegram not configured properly",
+                    "reason": "telegram_not_configured",
+                }
+                self._log_telegram_test_attempt(result)
+                return result
+
+            sent, reason = notifier.send_test_message("Telegram connection successful")
+            if sent:
+                result = {
+                    "timestamp": now_iso,
+                    "success": True,
+                    "status": "success",
+                    "message": "Test message sent successfully",
+                    "reason": reason,
+                }
+                self._log_telegram_test_attempt(result)
+                return result
+
+            result = {
+                "timestamp": now_iso,
+                "success": False,
+                "status": "error",
+                "message": f"Telegram test failed: {reason}",
+                "reason": reason,
+            }
+            self._log_telegram_test_attempt(result)
+            return result
+        except Exception as exc:  # pragma: no cover - defensive UI resilience
+            result = {
+                "timestamp": now_iso,
+                "success": False,
+                "status": "error",
+                "message": f"Telegram test failed: {exc}",
+                "reason": str(exc),
+            }
+            self._log_telegram_test_attempt(result)
+            return result
+
+    def _log_telegram_test_attempt(self, result: dict[str, Any]) -> None:
+        self.telegram_test_history_path.parent.mkdir(parents=True, exist_ok=True)
+        with self.telegram_test_history_path.open("a", encoding="utf-8") as handle:
+            handle.write(json.dumps(result) + "\n")
+        LOGGER.info(
+            "Telegram test attempt | timestamp=%s success=%s reason=%s",
+            result.get("timestamp", ""),
+            result.get("success", False),
+            result.get("reason", ""),
+        )
 
     @staticmethod
     def recommendation_to_record(recommendation: FinalRecommendation) -> dict[str, Any]:

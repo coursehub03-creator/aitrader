@@ -89,6 +89,10 @@ def ensure_state() -> None:
         "recommendation_history": [],
         "optimizer_output": pd.DataFrame(),
         "validation_output": pd.DataFrame(),
+        "send_test_telegram": False,
+        "last_telegram_test_time": "Never",
+        "last_telegram_test_result": "n/a",
+        "last_telegram_test_reason": "",
         "monitor_runtime": MonitorState(),
     }
     for k, v in defaults.items():
@@ -453,6 +457,14 @@ def sidebar_controls() -> None:
     st.session_state.refresh_now = st.sidebar.button("Refresh market data", use_container_width=True)
     st.session_state.run_optimizer_now = st.sidebar.button("Run optimizer", use_container_width=True)
     st.session_state.run_validation_now = st.sidebar.button("Run historical validation", use_container_width=True)
+    st.sidebar.markdown("### System Controls")
+    st.session_state.send_test_telegram = st.sidebar.button("Send Test Telegram Message", use_container_width=True)
+    st.sidebar.caption(
+        f"Last Telegram test: {st.session_state.last_telegram_test_time} | "
+        f"{st.session_state.last_telegram_test_result}"
+    )
+    if st.session_state.last_telegram_test_reason:
+        st.sidebar.caption(f"Reason: {st.session_state.last_telegram_test_reason}")
 
 
 def handle_refresh() -> None:
@@ -542,6 +554,31 @@ def main() -> None:
         with st.spinner("Running historical validation..."):
             validation_table = service.run_historical_validation()
         st.session_state.validation_output = validation_table
+
+    if st.session_state.send_test_telegram:
+        try:
+            service.refresh_settings()
+            telegram_test_result = service.send_test_telegram_message()
+        except Exception as exc:  # pragma: no cover - defensive streamlit behavior
+            telegram_test_result = {
+                "timestamp": datetime.now(tz=timezone.utc).isoformat(timespec="seconds"),
+                "status": "error",
+                "message": f"Telegram test failed: {exc}",
+                "reason": str(exc),
+            }
+
+        st.session_state.last_telegram_test_time = telegram_test_result.get("timestamp", "Never")
+        st.session_state.last_telegram_test_result = telegram_test_result.get("status", "error")
+        st.session_state.last_telegram_test_reason = telegram_test_result.get("reason", "")
+
+        status = telegram_test_result.get("status", "error")
+        message = telegram_test_result.get("message", "Telegram test failed")
+        if status == "success":
+            st.success(message)
+        elif status == "warning":
+            st.warning(message)
+        else:
+            st.error(message)
 
     top_tabs = st.tabs(["Trading Cockpit", "Market Visuals", "Self-Learning Center"])
     render_monitor_state()

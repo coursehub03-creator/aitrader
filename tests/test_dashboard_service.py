@@ -334,3 +334,67 @@ def test_evaluate_and_send_alert_suppresses_by_duplicate_history(tmp_path, monke
     assert first[0] == "sent"
     assert second[0] == "suppressed"
     assert second[1] == "duplicate_suppressed_by_history"
+
+
+def test_send_test_telegram_message_warns_when_disabled(tmp_path, monkeypatch) -> None:
+    service = DashboardService.__new__(DashboardService)
+    service.settings = object()
+    service.telegram_test_history_path = tmp_path / "telegram_test_history.jsonl"
+
+    class _FakeNotifier:
+        class config:
+            enabled = False
+            bot_token = "token"
+            chat_id = "chat"
+
+    monkeypatch.setattr(dashboard_module.TelegramNotifier, "from_settings", lambda _settings: _FakeNotifier())
+
+    result = service.send_test_telegram_message()
+
+    assert result["status"] == "warning"
+    assert result["message"] == "Telegram is disabled in configuration"
+    assert service.telegram_test_history_path.exists()
+
+
+def test_send_test_telegram_message_errors_when_not_configured(tmp_path, monkeypatch) -> None:
+    service = DashboardService.__new__(DashboardService)
+    service.settings = object()
+    service.telegram_test_history_path = tmp_path / "telegram_test_history.jsonl"
+
+    class _FakeNotifier:
+        class config:
+            enabled = True
+            bot_token = ""
+            chat_id = ""
+
+    monkeypatch.setattr(dashboard_module.TelegramNotifier, "from_settings", lambda _settings: _FakeNotifier())
+
+    result = service.send_test_telegram_message()
+
+    assert result["status"] == "error"
+    assert result["message"] == "Telegram not configured properly"
+    assert result["reason"] == "telegram_not_configured"
+
+
+def test_send_test_telegram_message_success(tmp_path, monkeypatch) -> None:
+    service = DashboardService.__new__(DashboardService)
+    service.settings = object()
+    service.telegram_test_history_path = tmp_path / "telegram_test_history.jsonl"
+
+    class _FakeNotifier:
+        class config:
+            enabled = True
+            bot_token = "token"
+            chat_id = "chat"
+
+        @staticmethod
+        def send_test_message(_message: str):
+            return True, "sent"
+
+    monkeypatch.setattr(dashboard_module.TelegramNotifier, "from_settings", lambda _settings: _FakeNotifier())
+
+    result = service.send_test_telegram_message()
+
+    assert result["status"] == "success"
+    assert result["message"] == "Test message sent successfully"
+    assert result["reason"] == "sent"
