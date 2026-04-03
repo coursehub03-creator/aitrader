@@ -9,7 +9,7 @@ from typing import Any
 import pandas as pd
 
 from core.paper_trading import PaperTrader
-from core.types import PaperTradeResult
+from core.types import PaperTradeResult, SignalAction
 from learning.evaluator import PerformanceEvaluator
 from strategy.base import TradingStrategy
 
@@ -73,7 +73,7 @@ class ParameterOptimizer:
         for i in range(self.min_history_bars, end, self.step):
             snapshot = candles.iloc[: i + 1]
             signal = strategy.generate_signal(snapshot, params)
-            if signal is None:
+            if signal.action == SignalAction.NO_TRADE:
                 continue
             future = candles.iloc[i + 1 : i + 1 + self.lookahead_bars]
             if future.empty:

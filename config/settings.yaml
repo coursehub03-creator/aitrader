@@ -19,11 +19,15 @@ strategy:
     rsi_period: 14
     rsi_buy_threshold: 55
     rsi_sell_threshold: 45
+    sl_pct: 0.003
+    tp_pct: 0.006
+    base_confidence: 0.62
   breakout_atr:
     breakout_lookback: 20
     atr_period: 14
     atr_sl_multiplier: 1.5
     atr_tp_multiplier: 2.5
+    base_confidence: 0.59
 
 learning:
   optimization_enabled: true

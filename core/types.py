@@ -4,7 +4,14 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from datetime import datetime
+from enum import Enum
 from typing import Any
+
+
+class SignalAction(str, Enum):
+    BUY = "BUY"
+    SELL = "SELL"
+    NO_TRADE = "NO_TRADE"
 
 
 @dataclass(slots=True)
@@ -28,8 +35,22 @@ class StrategySignal:
     stop_loss: float
     take_profit: float
     confidence: float
-    reason: str
+    reasons: list[str]
     metadata: dict[str, Any] = field(default_factory=dict)
+
+    @classmethod
+    def no_trade(
+        cls,
+        strategy_name: str,
+        reason: str,
+        confidence: float = 0.0,
+        entry: float = 0.0,
+    ) -> "StrategySignal":
+        return cls(strategy_name, SignalAction.NO_TRADE, entry, 0.0, 0.0, confidence, [reason])
+
+    @property
+    def reason(self) -> str:
+        return "; ".join(self.reasons)
 
 
 @dataclass(slots=True)

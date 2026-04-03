@@ -11,7 +11,7 @@ from typing import Any
 import pandas as pd
 
 from core.mt5_client import MT5Client
-from core.types import FinalRecommendation, StrategyScore, StrategySignal
+from core.types import FinalRecommendation, SignalAction, StrategyScore, StrategySignal
 from learning.optimizer import ParameterOptimizer
 from news.base import NewsProvider
 from news.filter import NewsFilter
@@ -98,7 +98,7 @@ class RecommendationEngine:
                     score = StrategyScore(strategy.name, opt.best_score, 0.0, 0, 0.0, 0.0, 0.0)
 
             signal = strategy.generate_signal(candles, params)
-            if signal is None:
+            if signal.action == SignalAction.NO_TRADE:
                 continue
 
             signal.metadata["active_params"] = params
@@ -138,8 +138,8 @@ class RecommendationEngine:
         strategy_outputs: list[tuple[StrategySignal, StrategyScore | None]],
         confidence_multiplier: float = 1.0,
     ) -> FinalRecommendation:
-        buys = [item for item in strategy_outputs if item[0].action == "Buy"]
-        sells = [item for item in strategy_outputs if item[0].action == "Sell"]
+        buys = [item for item in strategy_outputs if item[0].action == SignalAction.BUY]
+        sells = [item for item in strategy_outputs if item[0].action == SignalAction.SELL]
 
         if buys and sells:
             return self._no_trade(symbol, timeframe, "Conflicting strategy directions")
