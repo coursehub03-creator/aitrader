@@ -5,6 +5,8 @@ import { useMemo, useState } from "react";
 import {
   fetchHistoricalData,
   fetchHistoryInventory,
+  fetchHistoricalValidationResults,
+  runHistoricalValidation,
   type HistoricalFetchPayload,
   type HistoryInventoryPayload,
 } from "@/features/learning/api/learning";
@@ -13,13 +15,32 @@ const SYMBOLS = ["EURUSD", "GBPUSD", "USDJPY", "XAUUSD"];
 const TIMEFRAMES = ["M1", "M5", "M15", "M30", "H1", "H4", "D1"];
 const LOOKBACKS = [30, 90, 180, 365];
 
+type ValidationRow = {
+  symbol?: string;
+  timeframe?: string;
+  strategy?: string;
+  rank?: number;
+  total_trades?: number;
+  win_rate?: number;
+  loss_rate?: number;
+  net_pnl?: number;
+  max_drawdown?: number;
+  profit_factor?: number;
+  expectancy?: number;
+  score?: number;
+  params?: string;
+  best_in_symbol_timeframe?: boolean;
+};
+
 export function LearningCenterPanel() {
   const [symbol, setSymbol] = useState("EURUSD");
   const [timeframe, setTimeframe] = useState("M5");
   const [lookbackDays, setLookbackDays] = useState(90);
   const [status, setStatus] = useState<HistoricalFetchPayload | null>(null);
   const [inventory, setInventory] = useState<HistoryInventoryPayload["rows"]>([]);
+  const [validationRows, setValidationRows] = useState<ValidationRow[]>([]);
   const [busy, setBusy] = useState(false);
+  const [validationBusy, setValidationBusy] = useState(false);
 
   const statusTone = useMemo(() => {
     if (!status) return "idle";
@@ -47,6 +68,24 @@ export function LearningCenterPanel() {
       });
     } finally {
       setBusy(false);
+    }
+  }
+
+  async function onRunHistoricalValidation() {
+    setValidationBusy(true);
+    try {
+      const result = await runHistoricalValidation();
+      const rows = (result.rows as ValidationRow[]) ?? [];
+      setValidationRows(rows);
+      if (rows.length === 0) {
+        const fallback = await fetchHistoricalValidationResults();
+        setValidationRows((fallback.rows as ValidationRow[]) ?? []);
+      }
+    } catch {
+      const fallback = await fetchHistoricalValidationResults();
+      setValidationRows((fallback.rows as ValidationRow[]) ?? []);
+    } finally {
+      setValidationBusy(false);
     }
   }
 
@@ -84,9 +123,14 @@ export function LearningCenterPanel() {
         </label>
       </div>
 
-      <button type="button" onClick={onFetchHistoricalData} disabled={busy}>
-        {busy ? "Fetching..." : "Fetch Historical Data"}
-      </button>
+      <div className="control-grid">
+        <button type="button" onClick={onFetchHistoricalData} disabled={busy}>
+          {busy ? "Fetching..." : "Fetch Historical Data"}
+        </button>
+        <button type="button" onClick={onRunHistoricalValidation} disabled={validationBusy}>
+          {validationBusy ? "Validating..." : "Run Historical Validation"}
+        </button>
+      </div>
 
       <div className={`fetch-status ${statusTone}`}>
         <h3>Status</h3>
@@ -126,6 +170,52 @@ export function LearningCenterPanel() {
                   <td>
                     {item.data_start} → {item.data_end}
                   </td>
+                </tr>
+              ))
+            )}
+          </tbody>
+        </table>
+      </div>
+
+      <div>
+        <h3>Historical Validation Results</h3>
+        <table className="inventory-table">
+          <thead>
+            <tr>
+              <th>Symbol</th>
+              <th>TF</th>
+              <th>Strategy</th>
+              <th>Rank</th>
+              <th>Trades</th>
+              <th>Win Rate</th>
+              <th>Loss Rate</th>
+              <th>Net PnL</th>
+              <th>Max DD</th>
+              <th>PF</th>
+              <th>Expectancy</th>
+              <th>Score</th>
+            </tr>
+          </thead>
+          <tbody>
+            {validationRows.length === 0 ? (
+              <tr>
+                <td colSpan={12}>No validation results yet. Run historical validation.</td>
+              </tr>
+            ) : (
+              validationRows.map((item, index) => (
+                <tr key={`${item.symbol}-${item.timeframe}-${item.strategy}-${index}`}>
+                  <td>{item.symbol ?? "-"}</td>
+                  <td>{item.timeframe ?? "-"}</td>
+                  <td>{item.strategy ?? "-"}</td>
+                  <td>{item.rank ?? "-"}</td>
+                  <td>{item.total_trades ?? "-"}</td>
+                  <td>{typeof item.win_rate === "number" ? item.win_rate.toFixed(3) : "-"}</td>
+                  <td>{typeof item.loss_rate === "number" ? item.loss_rate.toFixed(3) : "-"}</td>
+                  <td>{typeof item.net_pnl === "number" ? item.net_pnl.toFixed(2) : "-"}</td>
+                  <td>{typeof item.max_drawdown === "number" ? item.max_drawdown.toFixed(2) : "-"}</td>
+                  <td>{typeof item.profit_factor === "number" ? item.profit_factor.toFixed(3) : "-"}</td>
+                  <td>{typeof item.expectancy === "number" ? item.expectancy.toFixed(3) : "-"}</td>
+                  <td>{typeof item.score === "number" ? item.score.toFixed(2) : "-"}</td>
                 </tr>
               ))
             )}

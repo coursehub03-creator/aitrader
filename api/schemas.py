@@ -67,3 +67,11 @@ class HistoricalFetchResponse(BaseModel):
 
 class HistoryInventoryEnvelope(BaseModel):
     rows: list[dict[str, Any]] = Field(default_factory=list)
+
+
+class HistoricalValidationRequest(BaseModel):
+    run: bool = True
+
+
+class HistoricalValidationEnvelope(BaseModel):
+    rows: list[dict[str, Any]] = Field(default_factory=list)

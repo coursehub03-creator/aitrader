@@ -18,6 +18,7 @@ from core.paper_trading import PaperTrader, TradeStore
 from core.types import FinalRecommendation, PaperTradeResult, SignalAction
 from learning.evaluator import PerformanceEvaluator
 from learning.historical_data import HistoricalDataPipeline
+from learning.historical_validation import HistoricalValidationPipeline, format_historical_results
 from learning.persistence import LearningPersistence
 from learning.unified import UnifiedLearningScorer
 from monitoring.alerts import AlertPolicy, AlertCooldownStore
@@ -537,35 +538,107 @@ class DashboardService:
         }
 
     def run_historical_validation(self) -> pd.DataFrame:
-        board = self.strategy_leaderboard_by_symbol(min_trades=1)
-        if board.empty:
-            self._append_learning_event("validation", "", "", "Historical validation skipped: no paper trades available.")
-            return pd.DataFrame()
-        result = board.rename(
-            columns={
-                "strategy_name": "strategy",
-                "trades": "total_trades",
-                "max_drawdown": "drawdown",
-            }
+        inventory = self.historical_data_summary()
+        if inventory.empty:
+            self._append_learning_event("validation", "", "", "Historical validation skipped: no stored history available.")
+            return pd.DataFrame([{"status": "no_history", "message": "No stored historical candles found. Fetch historical data first."}])
+
+        pipeline = HistoricalValidationPipeline(
+            lookahead_bars=int(self.settings.get("learning.lookahead_bars", 8)),
+            step=int(self.settings.get("learning.validation_step", 10)),
+            min_train_bars=int(self.settings.get("learning.validation_train_bars", 120)),
+            validation_bars=int(self.settings.get("learning.validation_bars", 60)),
+            rolling_step=int(self.settings.get("learning.validation_rolling_step", 30)),
         )
+
+        grid_root = self.settings.get("learning.parameter_grid", {})
+        symbol_grid_root = self.settings.get("learning.symbol_parameter_grid", {})
+        rows: list[dict[str, Any]] = []
+
+        for _, item in inventory.iterrows():
+            symbol = str(item.get("symbol", "")).upper()
+            timeframe = str(item.get("timeframe", "")).upper()
+            candles = self.history_pipeline.load_history(symbol, timeframe)
+            if candles.empty:
+                continue
+
+            saved_best = self.persistence.load_best_params(symbol, timeframe)
+            symbol_grid = symbol_grid_root.get(symbol, {})
+            for strategy in create_default_strategies():
+                defaults = dict(self.settings.get(f"strategy.{strategy.name}", {}))
+                parameter_grid = dict(grid_root.get(strategy.name, {}))
+                parameter_grid.update(dict(symbol_grid.get(strategy.name, {})))
+                fixed = {k: v for k, v in defaults.items() if k not in parameter_grid}
+
+                if strategy.name in saved_best:
+                    params = dict(saved_best[strategy.name].get("best_historical_params", fixed))
+                else:
+                    params = pipeline.choose_params(
+                        optimizer=self.engine.optimizer,
+                        strategy=strategy,
+                        candles=candles,
+                        symbol=symbol,
+                        fixed_params=fixed,
+                        parameter_grid=parameter_grid,
+                    )
+
+                evaluated = pipeline.evaluate_strategy(
+                    symbol=symbol,
+                    timeframe=timeframe,
+                    strategy=strategy,
+                    candles=candles,
+                    params=params,
+                )
+                if not evaluated:
+                    continue
+                rows.append(evaluated)
+
+        result = format_historical_results(rows)
+        if result.empty:
+            self._append_learning_event("validation", "", "", "Historical validation produced no qualifying windows/trades.")
+            return pd.DataFrame([{"status": "no_results", "message": "Historical validation produced no qualifying trades."}])
+
         result["timestamp"] = datetime.now(tz=timezone.utc).isoformat(timespec="seconds")
+        result["best_in_symbol_timeframe"] = result["rank"] == 1
         save_cols = [
             "timestamp",
-            "strategy",
             "symbol",
+            "timeframe",
+            "strategy",
+            "rank",
+            "train_windows",
+            "train_total_trades",
+            "train_win_rate",
+            "train_loss_rate",
+            "train_net_pnl",
+            "train_max_drawdown",
+            "train_profit_factor",
+            "train_expectancy",
+            "train_score",
             "total_trades",
-            "net_pnl",
             "win_rate",
-            "drawdown",
+            "loss_rate",
+            "net_pnl",
+            "max_drawdown",
             "profit_factor",
             "expectancy",
             "score",
+            "params",
+            "best_in_symbol_timeframe",
+            "explainability",
         ]
-        self.learning_dir.mkdir(parents=True, exist_ok=True)
-        result[save_cols].to_csv(self.learning_dir / "historical_validation.csv", index=False)
+        trimmed = result[save_cols].copy()
+        self.persistence.save_historical_validation_results(trimmed)
+        for _, row in trimmed[trimmed["best_in_symbol_timeframe"]].iterrows():
+            try:
+                params = json.loads(str(row["params"]))
+            except json.JSONDecodeError:
+                params = {}
+            self.persistence.save_best_params(str(row["symbol"]), str(row["timeframe"]), str(row["strategy"]), params, float(row["score"]))
+
         self._persist_learning_metadata(last_historical_validation_run=datetime.now(tz=timezone.utc).isoformat(timespec="seconds"))
-        self._append_learning_event("validation", "", "", f"Historical validation refreshed for {len(result)} strategy-symbol rows.")
-        return result[save_cols]
+        self._append_learning_event("validation", "", "", f"Historical validation refreshed for {len(trimmed)} rows across stored symbols/timeframes.")
+        return trimmed
 
     def run_historical_learning(self, symbol: str, timeframe: str) -> pd.DataFrame:
         candles = self.history_pipeline.load_history(symbol, timeframe)
