@@ -30,6 +30,7 @@ LEARNING_DATASET_SCHEMAS: dict[str, list[str]] = {
         "strategy_state",
         "historical_score",
         "recent_score",
+        "combined_score",
         "learning_confidence",
         "trade_count",
         "win_rate",
@@ -48,6 +49,7 @@ LEARNING_DATASET_SCHEMAS: dict[str, list[str]] = {
         "parameter_summary",
         "historical_score",
         "recent_score",
+        "combined_score",
         "promotion_eligibility",
         "sample_size",
         "blocked_reason",
@@ -94,6 +96,7 @@ LEARNING_DATASET_SCHEMAS: dict[str, list[str]] = {
         "parameter_summary",
         "historical_score",
         "recent_score",
+        "combined_score",
         "current_state",
         "last_updated",
     ],
@@ -254,7 +257,8 @@ def extract_best_configuration_per_symbol(active: pd.DataFrame) -> pd.DataFrame:
     frame = active.copy()
     frame["recent_score"] = pd.to_numeric(frame.get("recent_score"), errors="coerce").fillna(-999999)
     frame["historical_score"] = pd.to_numeric(frame.get("historical_score"), errors="coerce").fillna(-999999)
-    frame["combined_score"] = frame["recent_score"] * 0.65 + frame["historical_score"] * 0.35
+    if "combined_score" not in frame.columns:
+        frame["combined_score"] = frame["recent_score"] * 0.65 + frame["historical_score"] * 0.35
 
     ranked = frame.sort_values(["symbol", "combined_score"], ascending=[True, False]).groupby("symbol", as_index=False).head(1)
     ranked["last_updated"] = datetime.now(timezone.utc).isoformat(timespec="seconds")
@@ -270,6 +274,7 @@ def extract_best_configuration_per_symbol(active: pd.DataFrame) -> pd.DataFrame:
             "parameter_summary",
             "historical_score",
             "recent_score",
+            "combined_score",
             "current_state",
             "last_updated",
         ]

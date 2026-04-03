@@ -17,6 +17,9 @@ from core.mt5_client import MT5Client
 from core.paper_trading import PaperTrader, TradeStore
 from core.types import FinalRecommendation, PaperTradeResult, SignalAction
 from learning.evaluator import PerformanceEvaluator
+from learning.historical_data import HistoricalDataPipeline
+from learning.persistence import LearningPersistence
+from learning.unified import UnifiedLearningScorer
 from monitoring.alerts import AlertPolicy, AlertCooldownStore
 from notification.telegram_notifier import TelegramNotifier
 from strategy.registry import create_default_strategies
@@ -39,6 +42,16 @@ class DashboardService:
         self.engine = build_engine(self.settings)
         self.paper_trader = PaperTrader()
         self.trade_store = TradeStore()
+        self.persistence = LearningPersistence()
+        self.unified_scorer = UnifiedLearningScorer(
+            historical_weight=float(self.settings.get("learning.historical_weight", 0.4)),
+            recent_weight=float(self.settings.get("learning.recent_weight", 0.6)),
+            min_sample_size=int(self.settings.get("learning.min_promotion_sample", 15)),
+            max_drawdown=float(self.settings.get("learning.max_promotion_drawdown", 7.5)),
+            min_expectancy=float(self.settings.get("learning.min_promotion_expectancy", 0.0)),
+            degradation_threshold=float(self.settings.get("learning.degradation_threshold", 25.0)),
+        )
+        self.history_pipeline = HistoricalDataPipeline(self._build_mt5_client(), persistence=self.persistence)
         self.recent_recommendations_path = Path("logs/ui_recent_recommendations.csv")
         self.alert_history_path = Path("logs/ui_alert_history.csv")
         self.alert_state_path = Path("logs/ui_alert_state.json")
@@ -46,6 +59,27 @@ class DashboardService:
         self.trade_sqlite_path = Path("logs/paper_trades.sqlite3")
         self.learning_dir = Path("logs/learning")
         self.learning_metadata_path = self.learning_dir / "learning_metadata.json"
+
+    def fetch_historical_data(
+        self,
+        symbol: str,
+        timeframe: str,
+        lookback_value: int,
+        lookback_unit: str,
+    ) -> tuple[pd.DataFrame, str]:
+        mt5 = self._build_mt5_client()
+        pipeline = HistoricalDataPipeline(mt5, persistence=self.persistence)
+        mt5.connect()
+        try:
+            frame, path = pipeline.fetch_and_store(symbol, timeframe, lookback_value, lookback_unit)  # type: ignore[arg-type]
+            if frame.empty:
+                return frame, mt5.status_message or "No historical data available."
+            return frame, f"Fetched historical candles successfully. Saved {len(frame)} candles to {path}."
+        finally:
+            mt5.shutdown()
+
+    def historical_data_summary(self) -> pd.DataFrame:
+        return self.history_pipeline.summary()
 
     def refresh_settings(self) -> None:
         self.settings = load_settings(self.settings_path)
@@ -454,6 +488,47 @@ class DashboardService:
         self._append_learning_event("validation", "", "", f"Historical validation refreshed for {len(result)} strategy-symbol rows.")
         return result[save_cols]
 
+    def run_historical_learning(self, symbol: str, timeframe: str) -> pd.DataFrame:
+        candles = self.history_pipeline.load_history(symbol, timeframe)
+        if candles.empty:
+            return pd.DataFrame([{"status": "no_data", "message": "No historical candles available. Fetch data first."}])
+
+        grid_root = self.settings.get("learning.parameter_grid", {})
+        symbol_grid_root = self.settings.get("learning.symbol_parameter_grid", {}).get(symbol.upper(), {})
+        rows: list[dict[str, Any]] = []
+        for strategy in create_default_strategies():
+            defaults = dict(self.settings.get(f"strategy.{strategy.name}", {}))
+            base_grid = dict(grid_root.get(strategy.name, {}))
+            symbol_grid = dict(symbol_grid_root.get(strategy.name, {}))
+            base_grid.update(symbol_grid)
+            fixed = {k: v for k, v in defaults.items() if k not in base_grid}
+            result = self.engine.optimizer.optimize(strategy, candles, base_grid, symbol.upper(), fixed)
+            if result is None:
+                continue
+            rows.append(
+                {
+                    "symbol": symbol.upper(),
+                    "timeframe": timeframe.upper(),
+                    "strategy": result.strategy_name,
+                    "historical_score": float(result.best_score),
+                    "best_historical_params": json.dumps(result.best_params),
+                    "report_path": result.report_path,
+                    "tested_combinations": int(result.tested_combinations),
+                }
+            )
+            self.persistence.save_best_params(symbol.upper(), timeframe.upper(), result.strategy_name, result.best_params, result.best_score)
+        if not rows:
+            return pd.DataFrame([{"status": "no_candidates", "message": "Historical learning found no valid candidates."}])
+        out = pd.DataFrame(rows).sort_values("historical_score", ascending=False).reset_index(drop=True)
+        self.persistence.save_historical_validation(out)
+        self._append_learning_event(
+            "historical_learning",
+            "",
+            symbol.upper(),
+            f"Historical learning completed for {symbol.upper()}/{timeframe.upper()} ({len(out)} rows).",
+        )
+        return out
+
     def refresh_learning_data(self) -> dict[str, Any]:
         return self.learning_center_payload()
 
@@ -584,17 +659,24 @@ class DashboardService:
         active_rows: list[dict[str, Any]] = []
         for _, row in active.iterrows():
             trades, win_rate, expectancy, drawdown, recent_score = _score_for(str(row["strategy"]))
-            state_label = "stable"
-            if recent_score > 0 and float(row["score"]) > 0:
-                state_label = "promoted"
+            weighted = self.unified_scorer.score(float(row["score"]), recent_score)
+            state_label = self.unified_scorer.lifecycle_state(
+                sample_size=int(trades),
+                recent_drawdown=float(drawdown),
+                expectancy=float(expectancy),
+                historical_score=float(row["score"]),
+                recent_score=float(recent_score),
+                previous_state="active",
+            )
             active_rows.append(
                 {
                     "strategy_name": row["strategy"],
                     "symbol": symbol,
                     "timeframe": timeframe,
                     "strategy_state": state_label,
-                    "historical_score": float(row["score"]),
-                    "recent_score": recent_score,
+                    "historical_score": weighted.historical_score,
+                    "recent_score": weighted.recent_score,
+                    "combined_score": weighted.combined_score,
                     "learning_confidence": min(1.0, max(0.0, float(row["score"]) / 100)),
                     "trade_count": int(trades),
                     "win_rate": win_rate,
@@ -610,25 +692,26 @@ class DashboardService:
         candidate_rows: list[dict[str, Any]] = []
         for _, row in candidates.iterrows():
             trades, _win_rate, expectancy, drawdown, recent_score = _score_for(str(row["strategy"]))
+            weighted = self.unified_scorer.score(float(row["score"]), recent_score)
             blocked_reason = ""
             eligibility = "eligible"
-            if trades < 5:
-                blocked_reason = "Low sample size"
+            if not self.unified_scorer.promote_allowed(sample_size=int(trades), recent_drawdown=float(drawdown), expectancy=float(expectancy)):
                 eligibility = "blocked"
+            if trades < self.unified_scorer.min_sample_size:
+                blocked_reason = "Low sample size"
             elif expectancy < 0:
                 blocked_reason = "Poor expectancy"
-                eligibility = "blocked"
-            elif drawdown > 5:
+            elif drawdown > self.unified_scorer.max_drawdown:
                 blocked_reason = "High drawdown"
-                eligibility = "blocked"
             candidate_rows.append(
                 {
                     "strategy_name": row["strategy"],
                     "symbol": symbol,
                     "timeframe": timeframe,
                     "parameter_summary": str(row["best_params"]),
-                    "historical_score": float(row["score"]),
-                    "recent_score": recent_score,
+                    "historical_score": weighted.historical_score,
+                    "recent_score": weighted.recent_score,
+                    "combined_score": weighted.combined_score,
                     "promotion_eligibility": eligibility,
                     "sample_size": int(trades),
                     "blocked_reason": blocked_reason,
