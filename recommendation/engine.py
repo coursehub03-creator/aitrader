@@ -273,9 +273,15 @@ class RecommendationEngine:
         if not optimization_enabled:
             return {}
         results: dict[str, OptimizationResult] = {}
+        profile = profile_for_symbol(symbol, self.settings)
         for strategy in self.strategies:
             defaults = dict(self.settings.get(f"strategy.{strategy.name}", {}))
-            grid = {**dict(grid_root.get(strategy.name, {})), **dict(symbol_grid_root.get(strategy.name, {}))}
+            profile_ranges = dict(profile.optimizer_ranges.get(strategy.name, {})) if getattr(profile, "optimizer_ranges", None) else {}
+            grid = {
+                **dict(grid_root.get(strategy.name, {})),
+                **dict(symbol_grid_root.get(strategy.name, {})),
+                **profile_ranges,
+            }
             fixed = {k: v for k, v in defaults.items() if k not in grid}
             opt = self.optimizer.optimize(strategy, candles, grid, symbol, fixed)
             if opt is not None:
@@ -301,6 +307,22 @@ class RecommendationEngine:
         block_before = int(profile.news_sensitivity.get("block_before_min", 30))
         reduce_before = int(profile.news_sensitivity.get("reduce_before_min", 60))
         reduce_multiplier = float(profile.news_sensitivity.get("reduce_confidence_multiplier", 0.75))
+        block_windows = dict(profile.news_sensitivity.get("block_windows", {}))
+        currency_windows = dict(profile.news_sensitivity.get("currency_windows", {}))
+
+        if next_event is not None:
+            event_impact = str(next_event.get("impact", "")).lower()
+            event_currency = str(next_event.get("currency", "")).upper()
+            if event_currency in currency_windows and isinstance(currency_windows[event_currency], dict):
+                window_for_currency = currency_windows[event_currency]
+                block_before = int(window_for_currency.get("block_before_min", block_before))
+                reduce_before = int(window_for_currency.get("reduce_before_min", reduce_before))
+                reduce_multiplier = float(window_for_currency.get("reduce_confidence_multiplier", reduce_multiplier))
+            if event_impact in block_windows and isinstance(block_windows[event_impact], dict):
+                impact_window = block_windows[event_impact]
+                block_before = int(impact_window.get("block_before_min", block_before))
+                reduce_before = int(impact_window.get("reduce_before_min", reduce_before))
+                reduce_multiplier = float(impact_window.get("reduce_confidence_multiplier", reduce_multiplier))
 
         if next_event is not None and next_event["impact"] in {"high", "red"}:
             minutes = float(next_event["minutes_to_event"])

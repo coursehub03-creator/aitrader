@@ -22,6 +22,8 @@ news:
     USDJPY: [USD, JPY]
     XAUUSD: [USD, MACRO]
     GBPJPY: [GBP, JPY]
+    AUDUSD: [AUD, USD]
+    USDCAD: [USD, CAD]
 
 strategy:
   trend_rsi:
@@ -150,6 +152,63 @@ recommendation:
         currencies: [GBP, JPY]
         block_before_min: 35
         reduce_before_min: 80
+      optimizer_ranges:
+        trend_rsi:
+          ema_fast: [8, 12, 20]
+          ema_slow: [34, 50]
+        breakout_atr:
+          breakout_lookback: [15, 20, 25]
+    AUDUSD:
+      name: audusd_commodity_major
+      preferred_timeframes: [M5, M15, H1]
+      spread_threshold: 20
+      preferred_sessions: [asian, london, asian_london_overlap]
+      min_confidence: 0.61
+      min_risk_reward: 1.5
+      news_sensitivity:
+        currencies: [AUD, USD]
+        block_before_min: 35
+        reduce_before_min: 75
+        currency_windows:
+          AUD:
+            block_before_min: 45
+            reduce_before_min: 90
+        block_windows:
+          high:
+            block_before_min: 40
+            reduce_before_min: 80
+      optimizer_ranges:
+        trend_rsi:
+          ema_fast: [8, 10, 20]
+          ema_slow: [34, 50, 60]
+        breakout_atr:
+          atr_sl_multiplier: [1.0, 1.5, 2.0]
+    USDCAD:
+      name: usdcad_north_america_flow
+      preferred_timeframes: [M5, M15, H1]
+      spread_threshold: 21
+      preferred_sessions: [new_york, london_newyork_overlap]
+      min_confidence: 0.6
+      min_risk_reward: 1.6
+      news_sensitivity:
+        currencies: [USD, CAD]
+        block_before_min: 35
+        reduce_before_min: 70
+        currency_windows:
+          CAD:
+            block_before_min: 50
+            reduce_before_min: 100
+        block_windows:
+          high:
+            block_before_min: 45
+            reduce_before_min: 90
+      optimizer_ranges:
+        trend_rsi:
+          rsi_buy_threshold: [53, 55, 58]
+          rsi_sell_threshold: [42, 45, 47]
+        breakout_atr:
+          breakout_lookback: [20, 30]
+          atr_tp_multiplier: [2.0, 2.5, 3.0]
   volatility:
     atr_period: 14
     low_atr_pct: 0.0005

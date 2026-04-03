@@ -23,6 +23,7 @@ from learning.persistence import LearningPersistence
 from learning.unified import UnifiedLearningScorer
 from monitoring.alerts import AlertPolicy, AlertCooldownStore
 from notification.telegram_notifier import TelegramNotifier
+from recommendation.symbol_profile import profile_for_symbol
 from strategy.registry import create_default_strategies
 from ui.learning_center import (
     compute_learning_health_summary,
@@ -394,10 +395,13 @@ class DashboardService:
                 return pd.DataFrame([{"error": mt5.status_message or "No data for optimizer"}])
 
             grid_root = self.settings.get("learning.parameter_grid", {})
+            symbol_grid_root = self.settings.get(f"learning.symbol_parameter_grid.{symbol.upper()}", {})
+            profile = profile_for_symbol(symbol.upper(), self.settings)
             rows: list[dict[str, Any]] = []
             for strategy in create_default_strategies():
                 defaults = dict(self.settings.get(f"strategy.{strategy.name}", {}))
-                grid = dict(grid_root.get(strategy.name, {}))
+                profile_ranges = dict(profile.optimizer_ranges.get(strategy.name, {})) if profile.optimizer_ranges else {}
+                grid = {**dict(grid_root.get(strategy.name, {})), **dict(symbol_grid_root.get(strategy.name, {})), **profile_ranges}
                 fixed = {k: v for k, v in defaults.items() if k not in grid}
                 result = self.engine.optimizer.optimize(strategy, candles, grid, symbol.upper(), fixed)
                 if result is None:
@@ -420,6 +424,22 @@ class DashboardService:
             return table
         finally:
             mt5.shutdown()
+
+    def symbol_profile_summary(self, symbol: str) -> dict[str, Any]:
+        return profile_for_symbol(symbol.upper(), self.settings).to_display_dict()
+
+    def optimizer_leaderboard_by_symbol(self) -> pd.DataFrame:
+        report_dir = Path(str(self.settings.get("learning.optimization_report_dir", "logs/optimization")))
+        leaderboard_path = report_dir / "symbol_optimizer_leaderboard.json"
+        if not leaderboard_path.exists():
+            return pd.DataFrame()
+        try:
+            payload = json.loads(leaderboard_path.read_text(encoding="utf-8"))
+        except (json.JSONDecodeError, OSError):
+            return pd.DataFrame()
+        if not isinstance(payload, list):
+            return pd.DataFrame()
+        return pd.DataFrame(payload)
 
     def simulate_paper_trade_cycle(self, symbol: str, timeframe: str) -> tuple[pd.DataFrame, str]:
         mt5 = self._build_mt5_client()
