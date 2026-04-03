@@ -1,4 +1,4 @@
-"""Config loading helpers."""
+"""Configuration loading helpers."""
 
 from __future__ import annotations
 
@@ -12,6 +12,8 @@ from dotenv import load_dotenv
 
 @dataclass(slots=True)
 class Settings:
+    """Small helper for dot-path settings retrieval."""
+
     raw: dict[str, Any]
 
     def get(self, dotted_path: str, default: Any = None) -> Any:
@@ -24,10 +26,22 @@ class Settings:
 
 
 def load_settings(path: str | Path = "config/settings.yaml") -> Settings:
+    """Load YAML settings and .env values with actionable errors."""
     load_dotenv()
     settings_path = Path(path)
+
     if not settings_path.exists():
-        raise FileNotFoundError(f"Settings file not found: {settings_path}")
+        raise FileNotFoundError(
+            f"Settings file not found: {settings_path}. "
+            "Create it or pass --settings with a valid YAML file path."
+        )
+
     with settings_path.open("r", encoding="utf-8") as handle:
         payload = yaml.safe_load(handle) or {}
+
+    if not isinstance(payload, dict):
+        raise ValueError(
+            f"Settings file {settings_path} must contain a YAML mapping at the root."
+        )
+
     return Settings(raw=payload)

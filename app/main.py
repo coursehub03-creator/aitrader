@@ -21,15 +21,20 @@ LOGGER = logging.getLogger(__name__)
 
 
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description="MT5 AI-assisted recommendation system (paper only)")
+    """Create the CLI parser."""
+    parser = argparse.ArgumentParser(
+        description="MT5 AI-assisted recommendation system (paper trading only)"
+    )
     parser.add_argument("--symbol", required=True, help="Symbol like EURUSD")
     parser.add_argument("--timeframe", default="M5", help="M1/M5/M15/M30/H1/H4/D1")
-    parser.add_argument("--settings", default="config/settings.yaml", help="Settings YAML path")
+    parser.add_argument("--settings", default="config/settings.yaml", help="Path to settings YAML")
     return parser
 
 
 def main() -> None:
+    """Run the recommendation CLI and print JSON output."""
     args = build_parser().parse_args()
+
     settings = load_settings(args.settings)
     configure_logging(settings.get("app.log_level", "INFO"))
 
@@ -49,13 +54,18 @@ def main() -> None:
         ),
     )
 
-    try:
-        recommendation = engine.generate(symbol=args.symbol, timeframe=args.timeframe)
-        print(json.dumps(asdict(recommendation), indent=2, default=str))
-    except Exception as exc:  # broad-safe for CLI UX
-        LOGGER.exception("Failed to generate recommendation")
-        print(json.dumps({"error": str(exc)}, indent=2))
+    recommendation = engine.generate(
+        symbol=args.symbol.upper(),
+        timeframe=args.timeframe.upper(),
+    )
+    print(json.dumps(asdict(recommendation), indent=2, default=str))
 
 
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+    except FileNotFoundError as exc:
+        print(json.dumps({"error": str(exc)}, indent=2))
+    except Exception as exc:  # safety net for CLI runtime
+        LOGGER.exception("Unhandled error in recommendation CLI")
+        print(json.dumps({"error": f"Unexpected runtime error: {exc}"}, indent=2))
