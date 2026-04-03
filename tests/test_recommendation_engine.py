@@ -1,7 +1,9 @@
 from dataclasses import dataclass
 from datetime import datetime
 
+from core.types import NewsEvent
 from core.types import SignalAction, StrategyScore, StrategySignal
+from news.filter import NewsFilter
 from learning.optimizer import OptimizationResult
 from recommendation.engine import RecommendationEngine
 
@@ -83,7 +85,7 @@ def test_aggregate_excludes_very_weak_strategies() -> None:
 
 def test_format_for_terminal_contains_core_fields() -> None:
     engine = _engine()
-    rec = engine._no_trade("EURUSD", "M5", "High-impact news window", "blocked", datetime.utcnow(), 1.1)
+    rec = engine._no_trade("EURUSD", "M5", "News effect: High-impact news window", "blocked", datetime.utcnow(), 1.1)
 
     formatted = engine.format_for_terminal(rec)
 
@@ -93,3 +95,23 @@ def test_format_for_terminal_contains_core_fields() -> None:
     assert "REASONS" in formatted
     assert "Market Price" in formatted
     assert "Selected Strategy" in formatted
+    assert "News Effect" in formatted
+
+
+def test_news_gate_returns_unknown_when_provider_fails() -> None:
+    engine = _engine()
+    engine.settings = {"news.symbols_map": {}}
+    engine.mt5 = type("MT5", (), {"now": lambda self: datetime.utcnow()})()
+    engine.news_filter = NewsFilter(30, 15)
+
+    class _BoomProvider:
+        def fetch_events(self, from_time: datetime, to_time: datetime) -> list[NewsEvent]:
+            raise RuntimeError("provider down")
+
+    engine.news_provider = _BoomProvider()
+    blocked, news_status, reason, confidence_multiplier = engine._news_gate("EURUSD")
+
+    assert blocked is False
+    assert news_status == "unknown"
+    assert "unavailable" in reason
+    assert confidence_multiplier == 1.0

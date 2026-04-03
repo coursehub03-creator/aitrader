@@ -40,7 +40,29 @@ def test_news_filter_reduces_confidence_for_medium_impact() -> None:
             source="test",
         )
     ]
-    decision = NewsFilter(30, 30).evaluate(now, events, ["EUR", "USD"])
+    decision = NewsFilter(30, 15, medium_impact_confidence_multiplier=0.6).evaluate(now, events, ["EUR", "USD"])
     assert decision.decision == "reduce confidence"
-    assert decision.confidence_multiplier < 1.0
+    assert decision.confidence_multiplier == 0.6
     assert "Medium-impact" in decision.reason
+
+
+def test_news_filter_considers_macro_for_xauusd() -> None:
+    now = datetime.utcnow()
+    events = [
+        NewsEvent(
+            event_id="3",
+            title="ECB Rate Decision",
+            currency="EUR",
+            impact="High",
+            event_time=now + timedelta(minutes=3),
+            actual=None,
+            forecast=None,
+            previous=None,
+            source="test",
+        )
+    ]
+
+    decision = NewsFilter(30, 15).evaluate(now, events, ["USD", "MACRO"])
+
+    assert decision.decision == "block trading"
+    assert "High-impact" in decision.reason

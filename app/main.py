@@ -42,7 +42,8 @@ def main() -> None:
         news_provider=build_news_provider(settings),
         news_filter=NewsFilter(
             before_minutes=int(settings.get("news.high_impact_cooldown_before_min", 30)),
-            after_minutes=int(settings.get("news.high_impact_cooldown_after_min", 30)),
+            after_minutes=int(settings.get("news.high_impact_cooldown_after_min", 15)),
+            medium_impact_confidence_multiplier=float(settings.get("news.medium_impact_confidence_multiplier", 0.7)),
         ),
         strategies=create_default_strategies(),
         settings=settings,

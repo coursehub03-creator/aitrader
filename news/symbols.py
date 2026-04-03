@@ -9,6 +9,15 @@ def currencies_for_symbol(symbol: str, symbols_map: dict[str, list[str]]) -> lis
     if configured:
         return [currency.upper() for currency in configured]
 
+    defaults: dict[str, list[str]] = {
+        "EURUSD": ["EUR", "USD"],
+        "GBPUSD": ["GBP", "USD"],
+        "USDJPY": ["USD", "JPY"],
+        "XAUUSD": ["USD", "MACRO"],
+    }
+    if normalized_symbol in defaults:
+        return defaults[normalized_symbol]
+
     if len(normalized_symbol) >= 6 and normalized_symbol.isalpha():
         return [normalized_symbol[:3], normalized_symbol[3:6]]
 
