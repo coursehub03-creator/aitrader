@@ -42,7 +42,7 @@ class ForexFactoryProvider(NewsProvider):
             return []
 
         events: list[NewsEvent] = []
-        for item in payload:
+        for index, item in enumerate(payload):
             if not isinstance(item, dict):
                 continue
 
@@ -50,12 +50,17 @@ class ForexFactoryProvider(NewsProvider):
             if event_time is None or not (from_time <= event_time <= to_time):
                 continue
 
+            event_id = str(item.get("event_id") or item.get("id") or f"ff-{event_time.isoformat()}-{index}")
             events.append(
                 NewsEvent(
+                    event_id=event_id,
                     title=str(item.get("title", "Unknown")),
                     currency=str(item.get("currency", item.get("country", "UNK"))),
                     impact=str(item.get("impact", "Low")),
                     event_time=event_time,
+                    actual=_as_optional_text(item.get("actual")),
+                    forecast=_as_optional_text(item.get("forecast")),
+                    previous=_as_optional_text(item.get("previous")),
                     source="ForexFactory",
                 )
             )
@@ -89,3 +94,10 @@ class ForexFactoryProvider(NewsProvider):
                 return None
 
         return None
+
+
+def _as_optional_text(value: Any) -> str | None:
+    if value is None:
+        return None
+    text = str(value).strip()
+    return text or None

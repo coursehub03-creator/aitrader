@@ -15,6 +15,7 @@ from core.types import FinalRecommendation, StrategyScore, StrategySignal
 from learning.optimizer import ParameterOptimizer
 from news.base import NewsProvider
 from news.filter import NewsFilter
+from news.symbols import currencies_for_symbol
 from strategy.base import TradingStrategy
 
 LOGGER = logging.getLogger(__name__)
@@ -59,7 +60,7 @@ class RecommendationEngine:
                 reason = self.mt5.status_message or f"No market data for {symbol}/{timeframe}"
                 return self._no_trade(symbol, timeframe, reason)
 
-            blocked, reason = self._news_gate(symbol)
+            blocked, reason, confidence_multiplier = self._news_gate(symbol)
             if blocked:
                 return self._no_trade(symbol, timeframe, reason)
 
@@ -67,7 +68,7 @@ class RecommendationEngine:
             if not strategy_outputs:
                 return self._no_trade(symbol, timeframe, "No strategy produced an actionable signal")
 
-            return self._aggregate(symbol, timeframe, strategy_outputs)
+            return self._aggregate(symbol, timeframe, strategy_outputs, confidence_multiplier)
 
         finally:
             self.mt5.shutdown()
@@ -107,26 +108,35 @@ class RecommendationEngine:
 
         return outputs
 
-    def _news_gate(self, symbol: str) -> tuple[bool, str]:
+    def _news_gate(self, symbol: str) -> tuple[bool, str, float]:
         now = self.mt5.now()
-        events = self.news_provider.fetch_events(
-            now - timedelta(hours=4),
-            now + timedelta(hours=24),
-        )
+        try:
+            events = self.news_provider.fetch_events(
+                now - timedelta(hours=4),
+                now + timedelta(hours=24),
+            )
+        except Exception as exc:  # defensive fallback for custom providers
+            LOGGER.warning("News provider failed; continuing without news events: %s", exc)
+            events = []
 
-        symbol_currencies = self.settings.get("news.symbols_map", {}).get(symbol, [])
-        blocked, reason = self.news_filter.should_block(now, events, symbol_currencies)
+        symbol_currencies = currencies_for_symbol(symbol, self.settings.get("news.symbols_map", {}))
+        decision = self.news_filter.evaluate(now, events, symbol_currencies)
 
-        if blocked:
-            LOGGER.info("Recommendation blocked by news filter: %s", reason)
+        if decision.decision == "block trading":
+            LOGGER.info("Recommendation blocked by news filter: %s", decision.reason)
+            return True, decision.reason, decision.confidence_multiplier
 
-        return blocked, reason
+        if decision.decision == "reduce confidence":
+            LOGGER.info("Recommendation confidence reduced by news filter: %s", decision.reason)
+
+        return False, decision.reason, decision.confidence_multiplier
 
     def _aggregate(
         self,
         symbol: str,
         timeframe: str,
         strategy_outputs: list[tuple[StrategySignal, StrategyScore | None]],
+        confidence_multiplier: float = 1.0,
     ) -> FinalRecommendation:
         buys = [item for item in strategy_outputs if item[0].action == "Buy"]
         sells = [item for item in strategy_outputs if item[0].action == "Sell"]
@@ -165,7 +175,7 @@ class RecommendationEngine:
             entry=float(sum(entry_vals) / len(entry_vals)),
             stop_loss=float(sum(sl_vals) / len(sl_vals)),
             take_profit=float(sum(tp_vals) / len(tp_vals)),
-            confidence=float(confidence_weighted / weight_total),
+            confidence=float((confidence_weighted / weight_total) * confidence_multiplier),
             reason=" | ".join(reasons),
             contributing_strategies=names,
         )
