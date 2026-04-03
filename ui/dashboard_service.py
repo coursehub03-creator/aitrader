@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import asdict
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 import json
 import logging
 from pathlib import Path
@@ -235,6 +235,35 @@ class DashboardService:
             return candles, "Market data refreshed"
         finally:
             mt5.shutdown()
+
+    def recent_news_events(self, symbol: str, lookback_hours: int = 2, lookahead_hours: int = 24) -> list[dict[str, Any]]:
+        now = datetime.now(tz=timezone.utc)
+        try:
+            events = self.engine.news_provider.fetch_events(now - timedelta(hours=lookback_hours), now + timedelta(hours=lookahead_hours))
+        except Exception as exc:  # pragma: no cover - defensive streamlit behavior
+            LOGGER.warning("Could not fetch chart news events for %s: %s", symbol, exc)
+            return []
+
+        symbol_upper = symbol.upper()
+        mapped = []
+        for event in events:
+            mapped.append(
+                {
+                    "event_id": getattr(event, "event_id", ""),
+                    "title": getattr(event, "title", ""),
+                    "currency": getattr(event, "currency", ""),
+                    "impact": str(getattr(event, "impact", "")),
+                    "event_time": getattr(event, "event_time", now),
+                    "source": getattr(event, "source", ""),
+                }
+            )
+        if not mapped:
+            return []
+
+        symbol_currencies = set()
+        if len(symbol_upper) >= 6:
+            symbol_currencies = {symbol_upper[:3], symbol_upper[3:6]}
+        return [evt for evt in mapped if not symbol_currencies or str(evt.get("currency", "")).upper() in symbol_currencies]
 
     def run_optimizer(self, symbol: str, timeframe: str) -> pd.DataFrame:
         mt5 = self._build_mt5_client()
