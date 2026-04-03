@@ -5,7 +5,7 @@ from __future__ import annotations
 import argparse
 import json
 import logging
-from dataclasses import asdict
+from datetime import timezone
 
 from config_loader import load_settings
 from core.mt5_client import MT5Client
@@ -64,7 +64,26 @@ def main() -> None:
         timeframe=args.timeframe.upper(),
     )
     print(engine.format_for_terminal(recommendation))
-    print(json.dumps(asdict(recommendation), indent=2, default=str))
+    print(
+        json.dumps(
+            {
+                "symbol": recommendation.symbol,
+                "timeframe": recommendation.timeframe,
+                "timestamp": recommendation.timestamp.replace(tzinfo=timezone.utc).isoformat(),
+                "market_status": recommendation.market_status,
+                "news_status": recommendation.news_status,
+                "selected_strategy": recommendation.selected_strategy,
+                "action": recommendation.action,
+                "entry": recommendation.entry,
+                "stop_loss": recommendation.stop_loss,
+                "take_profit": recommendation.take_profit,
+                "confidence": recommendation.confidence,
+                "risk_reward": recommendation.risk_reward,
+                "reasons": recommendation.reasons,
+            },
+            indent=2,
+        )
+    )
 
 
 if __name__ == "__main__":

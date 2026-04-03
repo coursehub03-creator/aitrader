@@ -247,6 +247,27 @@ class RecommendationEngine:
         market_status: str = "open",
         timestamp: datetime | None = None,
     ) -> FinalRecommendation:
+        if market_status != "open":
+            return self._no_trade(
+                symbol,
+                timeframe,
+                f"Market is not open ({market_status}); trade blocked",
+                news_status,
+                market_status,
+                timestamp or datetime.utcnow(),
+                market_price,
+            )
+        if news_status == "blocked":
+            return self._no_trade(
+                symbol,
+                timeframe,
+                f"News filter blocked trading: {news_reason}",
+                news_status,
+                market_status,
+                timestamp or datetime.utcnow(),
+                market_price,
+            )
+
         buys = [item for item in strategy_outputs if item[0].action == SignalAction.BUY]
         sells = [item for item in strategy_outputs if item[0].action == SignalAction.SELL]
 
@@ -329,15 +350,14 @@ class RecommendationEngine:
         return FinalRecommendation(
             symbol=symbol,
             timeframe=timeframe,
-            final_action=selected[0][0].action,
+            action=selected[0][0].action,
             market_price=market_price,
             entry=avg_entry,
             stop_loss=avg_sl,
             take_profit=avg_tp,
-            risk_reward_ratio=risk_reward_ratio,
+            risk_reward=risk_reward_ratio,
             confidence=float((confidence_weighted / weight_total) * confidence_multiplier),
-            strategy_name=names[0] if len(names) == 1 else "+".join(names),
-            selected_strategy_name=names[0] if len(names) == 1 else "+".join(names),
+            selected_strategy=names[0] if len(names) == 1 else "+".join(names),
             market_status=market_status,
             news_status=news_status,
             reasons=reasons,
@@ -357,15 +377,14 @@ class RecommendationEngine:
         return FinalRecommendation(
             symbol=symbol,
             timeframe=timeframe,
-            final_action=SignalAction.NO_TRADE,
+            action=SignalAction.NO_TRADE,
             market_price=market_price,
             entry=0.0,
             stop_loss=0.0,
             take_profit=0.0,
-            risk_reward_ratio=0.0,
+            risk_reward=0.0,
             confidence=0.0,
-            strategy_name="none",
-            selected_strategy_name="none",
+            selected_strategy="none",
             market_status=market_status,
             news_status=news_status,
             reasons=[reason],
@@ -384,17 +403,18 @@ class RecommendationEngine:
         )
         lines = [
             "╔══════════════════════════ FINAL RECOMMENDATION ══════════════════════════╗",
-            f"║ Symbol/TF         : {recommendation.symbol}/{recommendation.timeframe}",
+            f"║ Symbol            : {recommendation.symbol}",
+            f"║ Timeframe         : {recommendation.timeframe}",
+            f"║ Timestamp (UTC)   : {recommendation.timestamp.isoformat()}",
             f"║ Market Status     : {recommendation.market_status}",
-            f"║ Action            : {recommendation.final_action}",
+            f"║ News Status       : {recommendation.news_status}",
+            f"║ Selected Strategy : {recommendation.selected_strategy}",
+            f"║ Action            : {recommendation.action}",
             f"║ Market Price      : {recommendation.market_price:.5f}",
             f"║ Entry / SL / TP   : {recommendation.entry:.5f} / {recommendation.stop_loss:.5f} / {recommendation.take_profit:.5f}",
-            f"║ Risk/Reward       : {recommendation.risk_reward_ratio:.2f}",
+            f"║ Risk/Reward       : {recommendation.risk_reward:.2f}",
             f"║ Confidence        : {recommendation.confidence:.2%}",
-            f"║ Selected Strategy : {recommendation.selected_strategy_name}",
-            f"║ News Status       : {recommendation.news_status}",
             f"║ News Effect       : {news_effect}",
-            f"║ Timestamp (UTC)   : {recommendation.timestamp.isoformat()}",
             "╠════════════════════════════════ REASONS ══════════════════════════════════╣",
         ]
         lines.extend([f"║  • {reason}" for reason in recommendation.reasons] or ["║  • n/a"])
