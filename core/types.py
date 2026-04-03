@@ -9,10 +9,14 @@ from typing import Any
 
 @dataclass(slots=True)
 class NewsEvent:
+    event_id: str
     title: str
     currency: str
     impact: str
     event_time: datetime
+    actual: str | None
+    forecast: str | None
+    previous: str | None
     source: str
 
 

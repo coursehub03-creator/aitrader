@@ -35,3 +35,21 @@ recommendation/     # Recommendation orchestration engine
 config/             # settings.yaml
 logs/               # Runtime artifacts (e.g. paper_trade_results.jsonl)
 tests/              # Unit tests
+```
+
+## News Layer
+
+- `core.types.NewsEvent` is the normalized event model with:
+  `event_id`, `title`, `currency`, `impact`, `event_time`, `actual`,
+  `forecast`, `previous`, and `source`.
+- `news.base.NewsProvider` defines the provider contract.
+- `news.providers.build_news_provider(...)` resolves providers from settings
+  (`forexfactory`, `none`), making the data source replaceable.
+- `news.filter.NewsFilter` produces one of:
+  - `block trading`
+  - `reduce confidence`
+  - `allow trading`
+- `news.symbols.currencies_for_symbol(...)` maps symbol relevance by config
+  (`news.symbols_map`) with a fallback split (e.g. `EURUSD -> EUR, USD`).
+- If a provider is unavailable, the engine logs warnings and continues safely
+  with no news events instead of crashing.

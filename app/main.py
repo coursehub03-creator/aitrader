@@ -12,7 +12,7 @@ from core.mt5_client import MT5Client
 from learning.optimizer import ParameterOptimizer
 from logs.logger import configure_logging
 from news.filter import NewsFilter
-from news.forexfactory_provider import ForexFactoryProvider
+from news.providers import build_news_provider
 from recommendation.engine import RecommendationEngine
 from strategy.breakout_atr import BreakoutATRStrategy
 from strategy.trend_rsi import TrendRSIStrategy
@@ -40,7 +40,7 @@ def main() -> None:
 
     engine = RecommendationEngine(
         mt5_client=MT5Client(),
-        news_provider=ForexFactoryProvider(endpoint=settings.get("news.endpoint", "")),
+        news_provider=build_news_provider(settings),
         news_filter=NewsFilter(
             before_minutes=int(settings.get("news.high_impact_cooldown_before_min", 30)),
             after_minutes=int(settings.get("news.high_impact_cooldown_after_min", 30)),
