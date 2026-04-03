@@ -20,6 +20,12 @@ from learning.evaluator import PerformanceEvaluator
 from monitoring.alerts import AlertPolicy, AlertCooldownStore
 from notification.telegram_notifier import TelegramNotifier
 from strategy.registry import create_default_strategies
+from ui.learning_center import (
+    compute_learning_health_summary,
+    extract_best_configuration_per_symbol,
+    load_learning_data,
+    prepare_state_changes,
+)
 
 LOGGER = logging.getLogger(__name__)
 
@@ -38,6 +44,8 @@ class DashboardService:
         self.alert_state_path = Path("logs/ui_alert_state.json")
         self.trade_csv_path = Path("logs/paper_trades.csv")
         self.trade_sqlite_path = Path("logs/paper_trades.sqlite3")
+        self.learning_dir = Path("logs/learning")
+        self.learning_metadata_path = self.learning_dir / "learning_metadata.json"
 
     def refresh_settings(self) -> None:
         self.settings = load_settings(self.settings_path)
@@ -261,7 +269,10 @@ class DashboardService:
 
             if not rows:
                 return pd.DataFrame([{"info": "No optimizer results (insufficient data or no valid candidates)."}])
-            return pd.DataFrame(rows).sort_values("score", ascending=False)
+            table = pd.DataFrame(rows).sort_values("score", ascending=False).reset_index(drop=True)
+            self._persist_optimizer_snapshot(table, symbol.upper(), timeframe.upper())
+            self._persist_learning_metadata(last_optimization_run=datetime.now(tz=timezone.utc).isoformat(timespec="seconds"))
+            return table
         finally:
             mt5.shutdown()
 
@@ -292,8 +303,9 @@ class DashboardService:
             if not trades:
                 return pd.DataFrame(), "No BUY/SELL strategy signals found for simulation cycle"
 
+            new_frame = self._paper_trade_frame_with_context(trades, timeframe.upper())
             existing = self.load_paper_trades(limit=1000)
-            combined = pd.concat([existing, TradeStore.as_dataframe(trades)], ignore_index=True) if not existing.empty else TradeStore.as_dataframe(trades)
+            combined = pd.concat([existing, new_frame], ignore_index=True) if not existing.empty else new_frame
             combined = combined.tail(1000)
 
             self.trade_csv_path.parent.mkdir(parents=True, exist_ok=True)
@@ -301,6 +313,7 @@ class DashboardService:
 
             with_rows = [self._row_to_trade_result(row) for _, row in combined.iterrows()]
             self.trade_store.save_sqlite(with_rows, self.trade_sqlite_path)
+            self._persist_learning_metadata(last_paper_trade_update=datetime.now(tz=timezone.utc).isoformat(timespec="seconds"))
             return TradeStore.as_dataframe(trades), f"Simulated {len(trades)} paper trades"
         finally:
             mt5.shutdown()
@@ -309,6 +322,18 @@ class DashboardService:
         if not self.trade_csv_path.exists():
             return pd.DataFrame(columns=TradeStore.REQUIRED_COLUMNS)
         frame = pd.read_csv(self.trade_csv_path)
+        for col, val in {
+            "timeframe": "",
+            "strategy": "",
+            "result": "",
+            "signal_strength": "unknown",
+            "market_conditions": "unknown",
+            "news_status": "unknown",
+            "spread_state": "unknown",
+            "session_state": "unknown",
+        }.items():
+            if col not in frame.columns:
+                frame[col] = val
         return frame.tail(limit).iloc[::-1].reset_index(drop=True)
 
     @staticmethod
@@ -352,6 +377,142 @@ class DashboardService:
                 rows.append({"symbol": symbol, **asdict(score)})
         return pd.DataFrame(rows)
 
+    def learning_center_payload(self) -> dict[str, Any]:
+        datasets = load_learning_data(self.learning_dir)
+        active = datasets["active"]
+        candidates = datasets["candidates"]
+        paper = self.load_paper_trades(limit=500)
+        metadata = datasets.get("metadata", {})
+        health = compute_learning_health_summary(active, candidates, paper, metadata=metadata)
+        best_configs = datasets["best_config"]
+        if best_configs.empty:
+            best_configs = extract_best_configuration_per_symbol(active)
+        return {
+            **datasets,
+            "health": asdict(health),
+            "best_config": best_configs,
+            "state_changes_prepared": prepare_state_changes(datasets["state_changes"]),
+        }
+
+    def run_historical_validation(self) -> pd.DataFrame:
+        board = self.strategy_leaderboard_by_symbol(min_trades=1)
+        if board.empty:
+            self._append_learning_event("validation", "", "", "Historical validation skipped: no paper trades available.")
+            return pd.DataFrame()
+        result = board.rename(
+            columns={
+                "strategy_name": "strategy",
+                "trades": "total_trades",
+                "max_drawdown": "drawdown",
+            }
+        )
+        result["timestamp"] = datetime.now(tz=timezone.utc).isoformat(timespec="seconds")
+        save_cols = [
+            "timestamp",
+            "strategy",
+            "symbol",
+            "total_trades",
+            "net_pnl",
+            "win_rate",
+            "drawdown",
+            "profit_factor",
+            "expectancy",
+            "score",
+        ]
+        self.learning_dir.mkdir(parents=True, exist_ok=True)
+        result[save_cols].to_csv(self.learning_dir / "historical_validation.csv", index=False)
+        self._persist_learning_metadata(last_historical_validation_run=datetime.now(tz=timezone.utc).isoformat(timespec="seconds"))
+        self._append_learning_event("validation", "", "", f"Historical validation refreshed for {len(result)} strategy-symbol rows.")
+        return result[save_cols]
+
+    def refresh_learning_data(self) -> dict[str, Any]:
+        return self.learning_center_payload()
+
+    def evaluate_open_paper_trades(self) -> tuple[int, str]:
+        trades = self.load_paper_trades(limit=2000)
+        if trades.empty:
+            return 0, "No paper trades found."
+        open_count = int((trades["outcome"].astype(str).str.upper() == "OPEN").sum())
+        self._append_learning_event("paper_trades", "", "", f"Evaluated open paper trades. currently_open={open_count}.")
+        return open_count, f"Open trades currently tracked: {open_count}"
+
+    def promote_eligible_candidates(self) -> int:
+        datasets = load_learning_data(self.learning_dir)
+        candidates = datasets["candidates"]
+        if candidates.empty:
+            return 0
+        eligible = candidates[candidates["promotion_eligibility"].astype(str).str.lower() == "eligible"].copy()
+        if eligible.empty:
+            return 0
+        now = datetime.now(tz=timezone.utc).isoformat(timespec="seconds")
+        active = datasets["active"].copy()
+        for _, row in eligible.iterrows():
+            active = pd.concat(
+                [
+                    active,
+                    pd.DataFrame(
+                        [
+                            {
+                                "strategy_name": row.get("strategy_name", ""),
+                                "symbol": row.get("symbol", ""),
+                                "timeframe": row.get("timeframe", ""),
+                                "strategy_state": "promoted",
+                                "historical_score": row.get("historical_score", 0),
+                                "recent_score": row.get("recent_score", 0),
+                                "learning_confidence": 0.7,
+                                "trade_count": row.get("sample_size", 0),
+                                "win_rate": 0,
+                                "expectancy": 0,
+                                "max_drawdown": 0,
+                                "last_promoted_time": now,
+                                "state_label": "promoted",
+                                "parameter_summary": row.get("parameter_summary", ""),
+                                "blocked_reason": "",
+                                "sample_size": row.get("sample_size", 0),
+                            }
+                        ]
+                    ),
+                ],
+                ignore_index=True,
+            )
+            self._append_state_change(now, row.get("strategy_name", ""), row.get("symbol", ""), "candidate", "promoted", "Eligibility threshold met.")
+            self._append_learning_event("promotion", row.get("strategy_name", ""), row.get("symbol", ""), "Candidate promoted to active.")
+        active.drop_duplicates(subset=["strategy_name", "symbol", "timeframe"], keep="last", inplace=True)
+        self.learning_dir.mkdir(parents=True, exist_ok=True)
+        active.to_csv(self.learning_dir / "active_strategies.csv", index=False)
+        remaining = candidates[candidates["promotion_eligibility"].astype(str).str.lower() != "eligible"]
+        remaining.to_csv(self.learning_dir / "candidate_strategies.csv", index=False)
+        return int(len(eligible))
+
+    def recompute_leaderboards(self) -> pd.DataFrame:
+        board = self.strategy_leaderboard_by_symbol(min_trades=1)
+        if board.empty:
+            return board
+        self.learning_dir.mkdir(parents=True, exist_ok=True)
+        board.to_csv(self.learning_dir / "latest_leaderboard.csv", index=False)
+        self._append_learning_event("leaderboard", "", "", f"Leaderboard recomputed ({len(board)} rows).")
+        return board
+
+    def archive_disabled_strategies(self) -> int:
+        datasets = load_learning_data(self.learning_dir)
+        active = datasets["active"]
+        if active.empty:
+            return 0
+        disabled = active[active["strategy_state"].astype(str).str.lower() == "disabled"]
+        if disabled.empty:
+            return 0
+        archive_path = self.learning_dir / "disabled_archive.csv"
+        if archive_path.exists():
+            existing = pd.read_csv(archive_path)
+            combined = pd.concat([existing, disabled], ignore_index=True)
+        else:
+            combined = disabled
+        combined.to_csv(archive_path, index=False)
+        active = active[active["strategy_state"].astype(str).str.lower() != "disabled"]
+        active.to_csv(self.learning_dir / "active_strategies.csv", index=False)
+        self._append_learning_event("archive", "", "", f"Archived {len(disabled)} disabled strategy rows.")
+        return int(len(disabled))
+
     def _build_mt5_client(self) -> MT5Client:
         return MT5Client(
             terminal_path=self.settings.get("mt5.terminal_path"),
@@ -361,3 +522,150 @@ class DashboardService:
             init_retries=int(self.settings.get("mt5.init_retries", 3)),
             retry_delay_seconds=float(self.settings.get("mt5.retry_delay_seconds", 0.5)),
         )
+
+    def _paper_trade_frame_with_context(self, trades: list[PaperTradeResult], timeframe: str) -> pd.DataFrame:
+        frame = TradeStore.as_dataframe(trades)
+        frame["timeframe"] = timeframe
+        frame["strategy"] = frame["strategy_name"]
+        frame["result"] = frame["outcome"]
+        frame["signal_strength"] = "unknown"
+        frame["market_conditions"] = "unknown"
+        frame["news_status"] = "unknown"
+        frame["spread_state"] = "unknown"
+        frame["session_state"] = "unknown"
+        return frame
+
+    def _persist_optimizer_snapshot(self, table: pd.DataFrame, symbol: str, timeframe: str) -> None:
+        self.learning_dir.mkdir(parents=True, exist_ok=True)
+        now = datetime.now(tz=timezone.utc).isoformat(timespec="seconds")
+        active_count = int(self.settings.get("learning.active_strategy_count", 2))
+        active = table.head(active_count).copy()
+        candidates = table.iloc[active_count:].copy()
+        leaderboard = self.strategy_leaderboard_by_symbol(min_trades=1)
+
+        def _score_for(strategy: str) -> tuple[float, float, float, float, float]:
+            if leaderboard.empty:
+                return 0.0, 0.0, 0.0, 0.0, 0.0
+            row = leaderboard[(leaderboard["symbol"] == symbol) & (leaderboard["strategy_name"] == strategy)]
+            if row.empty:
+                return 0.0, 0.0, 0.0, 0.0, 0.0
+            top = row.iloc[0]
+            return float(top["trades"]), float(top["win_rate"]), float(top["expectancy"]), float(top["max_drawdown"]), float(top["score"])
+
+        active_rows: list[dict[str, Any]] = []
+        for _, row in active.iterrows():
+            trades, win_rate, expectancy, drawdown, recent_score = _score_for(str(row["strategy"]))
+            state_label = "stable"
+            if recent_score > 0 and float(row["score"]) > 0:
+                state_label = "promoted"
+            active_rows.append(
+                {
+                    "strategy_name": row["strategy"],
+                    "symbol": symbol,
+                    "timeframe": timeframe,
+                    "strategy_state": state_label,
+                    "historical_score": float(row["score"]),
+                    "recent_score": recent_score,
+                    "learning_confidence": min(1.0, max(0.0, float(row["score"]) / 100)),
+                    "trade_count": int(trades),
+                    "win_rate": win_rate,
+                    "expectancy": expectancy,
+                    "max_drawdown": drawdown,
+                    "last_promoted_time": now if state_label == "promoted" else "",
+                    "state_label": state_label,
+                    "parameter_summary": str(row["best_params"]),
+                    "blocked_reason": "",
+                    "sample_size": int(trades),
+                }
+            )
+        candidate_rows: list[dict[str, Any]] = []
+        for _, row in candidates.iterrows():
+            trades, _win_rate, expectancy, drawdown, recent_score = _score_for(str(row["strategy"]))
+            blocked_reason = ""
+            eligibility = "eligible"
+            if trades < 5:
+                blocked_reason = "Low sample size"
+                eligibility = "blocked"
+            elif expectancy < 0:
+                blocked_reason = "Poor expectancy"
+                eligibility = "blocked"
+            elif drawdown > 5:
+                blocked_reason = "High drawdown"
+                eligibility = "blocked"
+            candidate_rows.append(
+                {
+                    "strategy_name": row["strategy"],
+                    "symbol": symbol,
+                    "timeframe": timeframe,
+                    "parameter_summary": str(row["best_params"]),
+                    "historical_score": float(row["score"]),
+                    "recent_score": recent_score,
+                    "promotion_eligibility": eligibility,
+                    "sample_size": int(trades),
+                    "blocked_reason": blocked_reason,
+                }
+            )
+
+        pd.DataFrame(active_rows).to_csv(self.learning_dir / "active_strategies.csv", index=False)
+        pd.DataFrame(candidate_rows).to_csv(self.learning_dir / "candidate_strategies.csv", index=False)
+        best = extract_best_configuration_per_symbol(pd.DataFrame(active_rows))
+        best.to_csv(self.learning_dir / "best_configurations.csv", index=False)
+        self._append_learning_event("optimizer", "", symbol, f"Optimizer completed for {symbol}/{timeframe} with {len(table)} candidates.")
+
+    def _persist_learning_metadata(self, **kwargs: Any) -> None:
+        self.learning_dir.mkdir(parents=True, exist_ok=True)
+        payload: dict[str, Any]
+        if self.learning_metadata_path.exists():
+            payload = json.loads(self.learning_metadata_path.read_text(encoding="utf-8"))
+        else:
+            payload = {}
+        payload.update(kwargs)
+        self.learning_metadata_path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+
+    def _append_learning_event(self, event_type: str, strategy: str, symbol: str, message: str) -> None:
+        self.learning_dir.mkdir(parents=True, exist_ok=True)
+        row = pd.DataFrame(
+            [
+                {
+                    "timestamp": datetime.now(tz=timezone.utc).isoformat(timespec="seconds"),
+                    "event_type": event_type,
+                    "strategy": strategy,
+                    "symbol": symbol,
+                    "message": message,
+                }
+            ]
+        )
+        path = self.learning_dir / "learning_events.csv"
+        if path.exists():
+            existing = pd.read_csv(path)
+            row = pd.concat([existing, row], ignore_index=True).tail(500)
+        row.to_csv(path, index=False)
+
+    def _append_state_change(
+        self,
+        timestamp: str,
+        strategy: str,
+        symbol: str,
+        previous_state: str,
+        new_state: str,
+        reason: str,
+    ) -> None:
+        self.learning_dir.mkdir(parents=True, exist_ok=True)
+        row = pd.DataFrame(
+            [
+                {
+                    "timestamp": timestamp,
+                    "strategy": strategy,
+                    "symbol": symbol,
+                    "previous_state": previous_state,
+                    "new_state": new_state,
+                    "reason": reason,
+                    "event_type": "state_change",
+                }
+            ]
+        )
+        path = self.learning_dir / "strategy_state_changes.csv"
+        if path.exists():
+            existing = pd.read_csv(path)
+            row = pd.concat([existing, row], ignore_index=True).tail(500)
+        row.to_csv(path, index=False)

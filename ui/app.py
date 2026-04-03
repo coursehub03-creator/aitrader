@@ -54,6 +54,13 @@ THEME_CSS = """
         border-radius: 14px;
         padding: 0.75rem;
     }
+    .badge { border-radius: 999px; padding: 0.18rem 0.6rem; font-size: 0.75rem; font-weight: 700; display:inline-block; }
+    .badge-promoted { background:#14532d; color:#dcfce7; }
+    .badge-stable { background:#1e3a8a; color:#dbeafe; }
+    .badge-probation { background:#92400e; color:#fef3c7; }
+    .badge-recently_degraded { background:#7f1d1d; color:#fee2e2; }
+    .badge-candidate { background:#5b21b6; color:#ede9fe; }
+    .badge-disabled { background:#374151; color:#e5e7eb; }
 </style>
 """
 
@@ -314,6 +321,233 @@ def render_placeholder() -> None:
         st.caption("Once generated, action, risk levels, confidence, reasons, and status details will appear here.")
 
 
+def _state_badge(state: str) -> str:
+    safe = state.strip().lower().replace(" ", "_")
+    return f'<span class="badge badge-{safe}">{state.upper() if state else "UNKNOWN"}</span>'
+
+
+def render_learning_center(service: DashboardService, symbol: str, timeframe: str) -> None:
+    st.markdown("## Self-Learning Center")
+    st.caption("Transparent, persistence-backed control center for optimizer, validation, and paper-trade learning flow.")
+
+    controls = st.columns(7)
+    if controls[0].button("Run Historical Validation", use_container_width=True):
+        frame = service.run_historical_validation()
+        st.success(f"Historical validation refreshed ({len(frame)} rows).")
+    if controls[1].button("Run Optimizer Now", use_container_width=True):
+        frame = service.run_optimizer(symbol, timeframe)
+        st.success(f"Optimizer finished ({len(frame)} rows).")
+    if controls[2].button("Refresh Learning Data", use_container_width=True):
+        st.info("Learning datasets reloaded from local persistence.")
+    if controls[3].button("Evaluate Open Paper Trades", use_container_width=True):
+        _, message = service.evaluate_open_paper_trades()
+        st.info(message)
+    if controls[4].button("Promote Eligible Candidates", use_container_width=True):
+        promoted = service.promote_eligible_candidates()
+        st.success(f"Promoted {promoted} candidate(s).")
+    if controls[5].button("Recompute Leaderboards", use_container_width=True):
+        board = service.recompute_leaderboards()
+        st.success(f"Leaderboard rows: {len(board)}.")
+    if controls[6].button("Archive Disabled Strategies", use_container_width=True):
+        archived = service.archive_disabled_strategies()
+        st.success(f"Archived disabled rows: {archived}.")
+
+    payload = service.learning_center_payload()
+    active = payload["active"]
+    candidates = payload["candidates"]
+    changes = payload["state_changes_prepared"]
+    historical = payload["historical_validation"]
+    events = payload["events"]
+    best_config = payload["best_config"]
+    paper = service.load_paper_trades(limit=400)
+    health = payload["health"]
+
+    with st.expander("Filters", expanded=True):
+        fcols = st.columns(5)
+        symbol_options = ["ALL"] + sorted({*active.get("symbol", pd.Series(dtype=str)).astype(str).tolist(), *candidates.get("symbol", pd.Series(dtype=str)).astype(str).tolist()})
+        timeframe_options = ["ALL"] + sorted({*active.get("timeframe", pd.Series(dtype=str)).astype(str).tolist(), *candidates.get("timeframe", pd.Series(dtype=str)).astype(str).tolist()})
+        strategy_options = ["ALL"] + sorted({*active.get("strategy_name", pd.Series(dtype=str)).astype(str).tolist(), *candidates.get("strategy_name", pd.Series(dtype=str)).astype(str).tolist()})
+        state_options = ["ALL"] + sorted(set(active.get("strategy_state", pd.Series(dtype=str)).astype(str).tolist()))
+        selected_symbol = fcols[0].selectbox("Symbol", symbol_options, index=0)
+        selected_timeframe = fcols[1].selectbox("Timeframe", timeframe_options, index=0)
+        selected_strategy = fcols[2].selectbox("Strategy", strategy_options, index=0)
+        selected_state = fcols[3].selectbox("Strategy State", state_options, index=0)
+        date_range = fcols[4].date_input("Date range", value=[])
+
+    def _apply_filters(frame: pd.DataFrame, strategy_col: str = "strategy_name") -> pd.DataFrame:
+        filtered = frame.copy()
+        if filtered.empty:
+            return filtered
+        if selected_symbol != "ALL" and "symbol" in filtered.columns:
+            filtered = filtered[filtered["symbol"].astype(str) == selected_symbol]
+        if selected_timeframe != "ALL" and "timeframe" in filtered.columns:
+            filtered = filtered[filtered["timeframe"].astype(str) == selected_timeframe]
+        if selected_strategy != "ALL" and strategy_col in filtered.columns:
+            filtered = filtered[filtered[strategy_col].astype(str) == selected_strategy]
+        if selected_state != "ALL" and "strategy_state" in filtered.columns:
+            filtered = filtered[filtered["strategy_state"].astype(str) == selected_state]
+        if len(date_range) == 2 and "timestamp" in filtered.columns:
+            ts = pd.to_datetime(filtered["timestamp"], errors="coerce").dt.date
+            filtered = filtered[(ts >= date_range[0]) & (ts <= date_range[1])]
+        return filtered
+
+    active = _apply_filters(active)
+    candidates = _apply_filters(candidates)
+    changes = _apply_filters(changes, strategy_col="strategy")
+    historical = _apply_filters(historical, strategy_col="strategy")
+    events = _apply_filters(events, strategy_col="strategy")
+
+    tabs = st.tabs(["Overview", "Active/Candidates", "Historical", "Paper Trades", "Events", "Configurations"])
+
+    with tabs[0]:
+        m = st.columns(9)
+        m[0].metric("Learning Health", health["status"].upper(), delta=health["status_reason"])
+        m[1].metric("Active", health["active_strategies"])
+        m[2].metric("Candidates", health["candidate_strategies"])
+        m[3].metric("Disabled", health["disabled_strategies"])
+        m[4].metric("Open Paper Trades", health["open_paper_trades"])
+        m[5].metric("Completed Paper Trades", health["completed_paper_trades"])
+        m[6].metric("Last Optimizer", health["last_optimization_run"])
+        m[7].metric("Last Validation", health["last_historical_validation_run"])
+        m[8].metric("Last Paper Update", health["last_paper_trade_update"])
+        st.info(health["status_reason"])
+
+    with tabs[1]:
+        st.markdown("### Active Strategies")
+        if active.empty:
+            st.info("No learning data yet. Run optimizer or paper trading to populate this section.")
+        else:
+            display = active.copy()
+            display["state_badge"] = display["strategy_state"].astype(str).map(lambda x: _state_badge(x))
+            display["trend"] = (pd.to_numeric(display["recent_score"], errors="coerce").fillna(0) - pd.to_numeric(display["historical_score"], errors="coerce").fillna(0)).map(lambda v: "⬆️ improving" if v >= 0 else "⬇️ degrading")
+            st.dataframe(
+                display[
+                    [
+                        "strategy_name",
+                        "symbol",
+                        "timeframe",
+                        "strategy_state",
+                        "historical_score",
+                        "recent_score",
+                        "learning_confidence",
+                        "trade_count",
+                        "win_rate",
+                        "expectancy",
+                        "max_drawdown",
+                        "last_promoted_time",
+                        "trend",
+                    ]
+                ],
+                use_container_width=True,
+                hide_index=True,
+            )
+
+        st.markdown("### Candidate Strategies (Not Yet Trusted Production Recommendations)")
+        if candidates.empty:
+            st.info("No learning data yet. Run optimizer or paper trading to populate this section.")
+        else:
+            show = candidates.copy()
+            show["eligibility_reason"] = show.apply(
+                lambda row: row["blocked_reason"] if str(row.get("promotion_eligibility", "")).lower() != "eligible" else "Eligible for promotion",
+                axis=1,
+            )
+            st.dataframe(
+                show[
+                    [
+                        "strategy_name",
+                        "symbol",
+                        "timeframe",
+                        "parameter_summary",
+                        "historical_score",
+                        "recent_score",
+                        "promotion_eligibility",
+                        "sample_size",
+                        "eligibility_reason",
+                    ]
+                ],
+                use_container_width=True,
+                hide_index=True,
+            )
+
+    with tabs[2]:
+        st.markdown("### Strategy State Changes")
+        if changes.empty:
+            st.info("No learning data yet.")
+        else:
+            st.dataframe(
+                changes[["timestamp", "strategy", "symbol", "previous_state", "new_state", "reason"]],
+                use_container_width=True,
+                hide_index=True,
+            )
+        st.markdown("### Historical Validation Metrics")
+        if historical.empty:
+            st.info("No learning data yet. Run optimizer or paper trading to populate this section.")
+        else:
+            st.dataframe(
+                historical[
+                    [
+                        "timestamp",
+                        "strategy",
+                        "symbol",
+                        "total_trades",
+                        "net_pnl",
+                        "win_rate",
+                        "drawdown",
+                        "profit_factor",
+                        "expectancy",
+                        "score",
+                    ]
+                ],
+                use_container_width=True,
+                hide_index=True,
+            )
+
+    with tabs[3]:
+        st.markdown("### Forward Paper Trading")
+        if paper.empty:
+            st.info("No learning data yet. Run optimizer or paper trading to populate this section.")
+        else:
+            open_trades = paper[paper["outcome"].astype(str).str.upper() == "OPEN"]
+            closed_trades = paper[paper["outcome"].astype(str).str.upper() != "OPEN"]
+            a, b = st.columns(2)
+            a.metric("Open Paper Trades", len(open_trades))
+            b.metric("Closed Paper Trades", len(closed_trades))
+            st.dataframe(
+                paper[
+                    [
+                        "symbol",
+                        "timeframe",
+                        "strategy_name",
+                        "entry",
+                        "exit_price",
+                        "pnl",
+                        "result",
+                        "signal_strength",
+                        "market_conditions",
+                        "news_status",
+                        "spread_state",
+                        "session_state",
+                    ]
+                ],
+                use_container_width=True,
+                hide_index=True,
+            )
+
+    with tabs[4]:
+        st.markdown("### Learning Event Log")
+        if events.empty:
+            st.info("No learning data yet.")
+        else:
+            st.dataframe(events[["timestamp", "event_type", "strategy", "symbol", "message"]], use_container_width=True, hide_index=True)
+
+    with tabs[5]:
+        st.markdown("### Best Configuration per Symbol")
+        if best_config.empty:
+            st.info("No learning data yet. Run optimizer or paper trading to populate this section.")
+        else:
+            st.dataframe(best_config, use_container_width=True, hide_index=True)
+
+
 def sidebar_controls(service: DashboardService) -> tuple[str, str, bool, int, bool, bool]:
     st.sidebar.header("Controls")
 
@@ -412,75 +646,77 @@ def main() -> None:
             st.session_state.current_recommendation_triggered_alert = False
 
     rec: FinalRecommendation = st.session_state.last_recommendation
-    render_status_cards(connection_text, rec)
-    st.caption(
-        f"Monitoring state: **{st.session_state.monitoring_state}** | "
-        f"Latest alert reason: `{st.session_state.latest_alert_reason or 'n/a'}` | "
-        f"Triggered this cycle: `{st.session_state.current_recommendation_triggered_alert}` | "
-        f"Suppressed reason: `{st.session_state.alert_suppressed_reason or 'n/a'}`"
-    )
-    st.markdown("---")
-    if (rec and rec.market_status == "mt5_unavailable") or (rec is None and status == "mt5_unavailable"):
-        st.error(
-            "⚠️ MT5 IS UNAVAILABLE — recommendation generation is forced to NO_TRADE until MT5 reconnects."
+    page_tabs = st.tabs(["Trading Cockpit", "Self-Learning Center"])
+    with page_tabs[0]:
+        render_status_cards(connection_text, rec)
+        st.caption(
+            f"Monitoring state: **{st.session_state.monitoring_state}** | "
+            f"Latest alert reason: `{st.session_state.latest_alert_reason or 'n/a'}` | "
+            f"Triggered this cycle: `{st.session_state.current_recommendation_triggered_alert}` | "
+            f"Suppressed reason: `{st.session_state.alert_suppressed_reason or 'n/a'}`"
         )
+        st.markdown("---")
+        if (rec and rec.market_status == "mt5_unavailable") or (rec is None and status == "mt5_unavailable"):
+            st.error(
+                "⚠️ MT5 IS UNAVAILABLE — recommendation generation is forced to NO_TRADE until MT5 reconnects."
+            )
 
-    # Main row: recommendation + diagnostics (dense cockpit style).
-    main_left, main_right = st.columns([1.6, 1], gap="medium")
-    with main_left:
-        if rec is None:
-            if status == "mt5_unavailable":
-                st.error("⚠️ MT5 unavailable — please open MetaTrader 5 and retry.")
-            render_placeholder()
-        else:
-            if rec.market_status == "mt5_unavailable":
-                st.error("⚠️ MT5 unavailable — recommendation quality is limited until MT5 is reachable.")
-            if rec.market_status == "closed":
-                st.warning("🚫 Market Closed — recommendation forced to NO_TRADE.")
-            render_recommendation_summary(rec)
-            render_recommendation_detail_table(rec)
+        main_left, main_right = st.columns([1.6, 1], gap="medium")
+        with main_left:
+            if rec is None:
+                if status == "mt5_unavailable":
+                    st.error("⚠️ MT5 unavailable — please open MetaTrader 5 and retry.")
+                render_placeholder()
+            else:
+                if rec.market_status == "mt5_unavailable":
+                    st.error("⚠️ MT5 unavailable — recommendation quality is limited until MT5 is reachable.")
+                if rec.market_status == "closed":
+                    st.warning("🚫 Market Closed — recommendation forced to NO_TRADE.")
+                render_recommendation_summary(rec)
+                render_recommendation_detail_table(rec)
 
-    with main_right:
-        if rec is None:
-            with st.container(border=True):
-                st.markdown("### Strategy Diagnostics")
-                st.info("Run one recommendation cycle to populate diagnostics and reason traces.")
-            with st.container(border=True):
-                st.markdown("### Market and News Status")
-                st.info("Market/news status and rationale are shown after a recommendation run.")
-        else:
-            render_strategy_diagnostics(rec)
-            render_market_news_panel(rec)
-            if not st.session_state.optimizer_table.empty:
-                st.markdown("### Latest Optimizer Run")
-                st.dataframe(st.session_state.optimizer_table, use_container_width=True, hide_index=True, height=260)
+        with main_right:
+            if rec is None:
+                with st.container(border=True):
+                    st.markdown("### Strategy Diagnostics")
+                    st.info("Run one recommendation cycle to populate diagnostics and reason traces.")
+                with st.container(border=True):
+                    st.markdown("### Market and News Status")
+                    st.info("Market/news status and rationale are shown after a recommendation run.")
+            else:
+                render_strategy_diagnostics(rec)
+                render_market_news_panel(rec)
+                if not st.session_state.optimizer_table.empty:
+                    st.markdown("### Latest Optimizer Run")
+                    st.dataframe(st.session_state.optimizer_table, use_container_width=True, hide_index=True, height=260)
 
-    st.markdown("---")
+        st.markdown("---")
+        col_history, col_paper, col_leader = st.columns([1.2, 1.2, 1], gap="medium")
 
-    # Bottom row: history + paper trading + leaderboard.
-    col_history, col_paper, col_leader = st.columns([1.2, 1.2, 1], gap="medium")
+        with col_history:
+            render_recent_recommendations(service)
+            if not st.session_state.market_snapshot.empty:
+                st.markdown("### Latest Market Data Snapshot")
+                st.dataframe(st.session_state.market_snapshot, use_container_width=True, hide_index=True, height=240)
 
-    with col_history:
-        render_recent_recommendations(service)
-        if not st.session_state.market_snapshot.empty:
-            st.markdown("### Latest Market Data Snapshot")
-            st.dataframe(st.session_state.market_snapshot, use_container_width=True, hide_index=True, height=240)
+        with col_paper:
+            render_paper_trading_panel(service)
+            if not st.session_state.simulated_trades.empty:
+                st.markdown("### Last Simulation Result")
+                st.dataframe(st.session_state.simulated_trades, use_container_width=True, hide_index=True, height=240)
 
-    with col_paper:
-        render_paper_trading_panel(service)
-        if not st.session_state.simulated_trades.empty:
-            st.markdown("### Last Simulation Result")
-            st.dataframe(st.session_state.simulated_trades, use_container_width=True, hide_index=True, height=240)
+        with col_leader:
+            render_leaderboard(service)
+            alerts = service.recent_alert_events(limit=25)
+            st.markdown("### Alert History")
+            if alerts.empty:
+                st.info("No alert events yet.")
+            else:
+                st.dataframe(alerts, use_container_width=True, hide_index=True, height=220)
+            render_debug_panel()
 
-    with col_leader:
-        render_leaderboard(service)
-        alerts = service.recent_alert_events(limit=25)
-        st.markdown("### Alert History")
-        if alerts.empty:
-            st.info("No alert events yet.")
-        else:
-            st.dataframe(alerts, use_container_width=True, hide_index=True, height=220)
-        render_debug_panel()
+    with page_tabs[1]:
+        render_learning_center(service, symbol, timeframe)
 
     if auto_refresh:
         st.caption(f"Auto refresh enabled. Next refresh in {interval} seconds. Watch mode: {watch_mode}.")

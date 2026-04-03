@@ -55,6 +55,66 @@ The project includes a premium local dashboard for manual decision support:
 - Strategy leaderboard based on paper-trade outcomes
 - Debug/log panel for operator troubleshooting
 - Optional watch mode for auto-monitoring + alert status visibility
+- Self-Learning Center with operator controls, state transparency, and event logs
+
+### Self-Learning Center (Learning Control Center)
+
+The dashboard now includes a dedicated **Self-Learning Center** tab for transparent, operator-grade monitoring of learning decisions.
+
+#### What it shows
+
+- **Active Strategies Panel**: active strategy rows with state, historical/recent score, confidence, sample size, win rate, expectancy, drawdown, and latest promotion timestamp.
+- **Candidate Strategies Panel**: strategy candidates still under evaluation, including eligibility and explicit blocking reasons.
+- **Strategy State Changes Panel**: promotion/demotion/reactivation transitions with timestamps and rationale.
+- **Historical Validation Panel**: total trades, net pnl, win rate, drawdown, profit factor, expectancy, and score (filterable).
+- **Forward Paper Trading Panel**: open/closed paper trades and recent outcomes with market/news/session/spread context columns.
+- **Learning Health Panel**: freshness and counts for optimizer, historical validation, paper updates, active/candidate/disabled strategy counts, and paper trade counts.
+- **Best Configuration per Symbol Panel**: top active parameter set per symbol with score/state context.
+- **Learning Event Log**: concise recent optimizer runs, rejections, promotions, and state transitions.
+
+#### Operator controls
+
+- Run Historical Validation
+- Run Optimizer Now
+- Refresh Learning Data
+- Evaluate Open Paper Trades
+- Promote Eligible Candidates
+- Recompute Leaderboards
+- Archive Disabled Strategies (optional)
+
+#### Data population + persistence
+
+Learning Center reads/writes local-first persistence in `logs/learning/`:
+
+- `active_strategies.csv`
+- `candidate_strategies.csv`
+- `strategy_state_changes.csv`
+- `historical_validation.csv`
+- `best_configurations.csv`
+- `learning_events.csv`
+- `learning_metadata.json`
+
+If files are not present yet, the UI shows clean placeholders (for example: _No learning data yet_ and _Run optimizer or paper trading to populate this section_).
+
+#### State meanings
+
+- `promoted`: candidate passed eligibility and was moved into active usage.
+- `stable`: active and not currently degraded.
+- `probation`: active but under closer monitoring due to recent quality/risk concerns.
+- `disabled`: removed from active usage due to repeated performance/risk violations.
+
+#### Promotion / demotion behavior
+
+- Promotion is based on candidate eligibility (sample size + quality checks).
+- Candidate eligibility explains blocking reasons explicitly (e.g., low sample size, poor expectancy, high drawdown).
+- State transitions are persisted and visible in the state change/event panels.
+
+#### How paper trading feeds learning
+
+- Paper-trade outcomes update strategy scoreboards and validation artifacts.
+- Historical validation is recomputed from paper-trade history.
+- Best symbol-level configurations are refreshed from active strategy rankings.
+- Learning health freshness uses timestamps from optimization, validation, and paper-trade updates.
 
 ### Run locally
 
