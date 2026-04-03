@@ -78,6 +78,9 @@ def ensure_state() -> None:
         "recommendation_history": [],
         "latest_alert_status": "n/a",
         "latest_alert_reason": "",
+        "last_sent_alert_timestamp": "n/a",
+        "current_recommendation_triggered_alert": False,
+        "alert_suppressed_reason": "",
         "monitoring_state": "idle",
     }
     for key, value in defaults.items():
@@ -127,12 +130,13 @@ def render_status_cards(connection_status: str, recommendation: FinalRecommendat
     market_status = recommendation.market_status if recommendation else "n/a"
     news_status = recommendation.news_status if recommendation else "n/a"
     refresh_text = st.session_state.last_refresh_label
-    cards = st.columns(5)
+    cards = st.columns(6)
     cards[0].metric("MT5 Connection", mt5_status)
     cards[1].metric("Market Status", market_status)
     cards[2].metric("News Status", news_status)
     cards[3].metric("Last Refresh", refresh_text)
     cards[4].metric("Alert Status", st.session_state.latest_alert_status)
+    cards[5].metric("Last Alert Sent", st.session_state.last_sent_alert_timestamp)
 
 
 def render_recommendation_summary(recommendation: FinalRecommendation) -> None:
@@ -381,19 +385,26 @@ def main() -> None:
         st.session_state.recommendation_history = history[-100:]
         log_debug(f"Recommendation generated for {symbol}/{timeframe}: action={recommendation.action}")
         if watch_mode:
-            alert_status, alert_reason = service.evaluate_and_send_alert(recommendation)
-            service.persist_alert_event(recommendation, alert_status, alert_reason)
+            alert_status, alert_reason, triggered, alert_type = service.evaluate_and_send_alert(recommendation)
+            service.persist_alert_event(recommendation, alert_status, alert_reason, triggered, alert_type)
             st.session_state.latest_alert_status = alert_status
             st.session_state.latest_alert_reason = alert_reason
+            st.session_state.current_recommendation_triggered_alert = triggered
+            st.session_state.alert_suppressed_reason = alert_reason if alert_status == "suppressed" else ""
+            if alert_status == "sent":
+                st.session_state.last_sent_alert_timestamp = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
         else:
             st.session_state.latest_alert_status = "not_evaluated"
             st.session_state.latest_alert_reason = "watch mode disabled"
+            st.session_state.current_recommendation_triggered_alert = False
 
     rec: FinalRecommendation = st.session_state.last_recommendation
     render_status_cards(connection_text, rec)
     st.caption(
         f"Monitoring state: **{st.session_state.monitoring_state}** | "
-        f"Latest alert reason: `{st.session_state.latest_alert_reason or 'n/a'}`"
+        f"Latest alert reason: `{st.session_state.latest_alert_reason or 'n/a'}` | "
+        f"Triggered this cycle: `{st.session_state.current_recommendation_triggered_alert}` | "
+        f"Suppressed reason: `{st.session_state.alert_suppressed_reason or 'n/a'}`"
     )
     st.markdown("---")
     if (rec and rec.market_status == "mt5_unavailable") or (rec is None and status == "mt5_unavailable"):

@@ -173,6 +173,10 @@ The dashboard top cards and the recommendation output now use the same backend r
 monitoring:
   interval_seconds: 300
   alert_cooldown_seconds: 900
+  send_rejected_alerts: false
+  send_summary_alerts: false
+  minimum_signal_strength_for_alert: strong
+  minimum_confidence_for_alert: 0.6
   symbols: [EURUSD, GBPUSD, USDJPY]
   telegram:
     enabled: false
@@ -189,6 +193,7 @@ You can configure credentials in YAML or via environment variables:
 - `TELEGRAM_CHAT_ID`
 
 Alerts are **best-effort**: failures are logged and never crash monitoring cycles.
+If Telegram is enabled but credentials are missing, the monitor safely returns `telegram_not_configured` and continues.
 
 ### Run monitor mode from CLI
 
@@ -220,7 +225,37 @@ Alerts are sent only when all conditions pass:
 - confidence >= configured minimum
 - risk/reward >= configured minimum
 
-Duplicate alerts are suppressed with per-symbol+direction cooldown.
+Duplicate alerts are suppressed with per-`symbol + timeframe + direction` cooldown.
+
+Optional rejected-signal alerts (disabled by default) can report concise reasons for:
+- market closed
+- news blocking
+- spread/session/quality filters
+- low confidence / low risk-reward
+
+### Telegram message example
+
+```text
+📌 Trading Recommendation Alert
+
+Instrument
+- Symbol: EURUSD
+- Timeframe: M5
+- Action: BUY
+
+Signal Quality
+- Signal Strength: strong
+- Confidence: 78.00%
+- Risk/Reward: 2.10
+- Strategy: trend_rsi
+...
+```
+
+### Cooldown behavior
+
+- A cooldown marker is stored after every sent strong alert.
+- On the next cycle, matching keys (`symbol:timeframe:action`) are suppressed until `alert_cooldown_seconds` elapses.
+- Suppression reasons are persisted to alert history logs for operations/auditing.
 
 ### Monitoring persistence
 

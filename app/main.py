@@ -5,7 +5,6 @@ from __future__ import annotations
 import argparse
 import json
 import logging
-import os
 import time
 from datetime import datetime, timezone
 from pathlib import Path
@@ -128,14 +127,19 @@ def _persist_alert_result(
     sent: bool,
     status: str,
     reason: str,
+    alert_type: str,
 ) -> None:
     ALERT_LOG_PATH.parent.mkdir(parents=True, exist_ok=True)
     payload: dict[str, Any] = {
         "cycle": cycle,
         "symbol": symbol,
         "timestamp": datetime.now(tz=timezone.utc).isoformat(timespec="seconds"),
+        "timeframe": recommendation.timeframe,
+        "alert_type": alert_type,
+        "message_summary": f"{symbol} {recommendation.timeframe} {recommendation.action} {recommendation.signal_strength}",
         "sent": sent,
         "status": status,
+        "suppression_reason": reason if status == "suppressed" else "",
         "reason": reason,
         "recommendation": _recommendation_to_dict(recommendation),
     }
@@ -193,18 +197,7 @@ def build_engine(settings: Any) -> RecommendationEngine:
 
 
 def _build_telegram_notifier(settings: Any) -> TelegramNotifier:
-    token = str(settings.get("monitoring.telegram.bot_token") or os.getenv("TELEGRAM_BOT_TOKEN") or "")
-    chat_id = str(settings.get("monitoring.telegram.chat_id") or os.getenv("TELEGRAM_CHAT_ID") or "")
-    enabled = bool(settings.get("monitoring.telegram.enabled", False))
-    timeout_seconds = float(settings.get("monitoring.telegram.timeout_seconds", 10))
-    return TelegramNotifier(
-        TelegramConfig(
-            enabled=enabled,
-            bot_token=token,
-            chat_id=chat_id,
-            timeout_seconds=timeout_seconds,
-        )
-    )
+    return TelegramNotifier.from_settings(settings)
 
 
 def run(engine: RecommendationEngine, args: argparse.Namespace, settings: Any | None = None) -> None:
@@ -214,9 +207,19 @@ def run(engine: RecommendationEngine, args: argparse.Namespace, settings: Any | 
     symbols = _resolve_symbols(args, settings)
     cycle = 1
 
-    min_confidence = float(settings.get("recommendation.min_confidence", 0.6)) if hasattr(settings, "get") else 0.6
+    min_confidence = (
+        float(settings.get("monitoring.minimum_confidence_for_alert", settings.get("recommendation.min_confidence", 0.6)))
+        if hasattr(settings, "get")
+        else 0.6
+    )
     min_rr = float(settings.get("recommendation.min_risk_reward", 1.5)) if hasattr(settings, "get") else 1.5
-    policy = AlertPolicy(min_confidence=min_confidence, min_risk_reward=min_rr)
+    policy = AlertPolicy(
+        min_confidence=min_confidence,
+        min_risk_reward=min_rr,
+        min_signal_strength=str(
+            settings.get("monitoring.minimum_signal_strength_for_alert", "strong")
+        ) if hasattr(settings, "get") else "strong",
+    )
 
     configured_cooldown = int(settings.get("monitoring.alert_cooldown_seconds", 900)) if hasattr(settings, "get") else 900
     cooldown_seconds = int(args.cooldown) if args.cooldown is not None else configured_cooldown
@@ -246,12 +249,13 @@ def run(engine: RecommendationEngine, args: argparse.Namespace, settings: Any | 
                 alert_status = "suppressed"
                 alert_reason = qualifier_reason
                 sent = False
+                alert_type = "strong_trade_alert"
 
                 if should_alert:
                     key = cooldown_store.build_key(recommendation)
                     can_send, cooldown_reason = cooldown_store.can_send(key, datetime.now(tz=timezone.utc))
                     if can_send:
-                        sent, send_reason = notifier.send_recommendation_alert(recommendation)
+                        sent, send_reason = notifier.send_recommendation_alert(recommendation, alert_type=alert_type)
                         alert_status = "sent" if sent else "failed"
                         alert_reason = send_reason
                         if sent:
@@ -259,6 +263,21 @@ def run(engine: RecommendationEngine, args: argparse.Namespace, settings: Any | 
                     else:
                         alert_status = "suppressed"
                         alert_reason = cooldown_reason
+                        LOGGER.info("Alert suppressed by cooldown for %s: %s", symbol, cooldown_reason)
+                elif notifier.config.send_rejected_alerts:
+                    rejection_map = {
+                        "market_closed_or_unavailable": "trade_blocked_by_market_closed",
+                        "news_blocked": "trade_blocked_by_news",
+                        "confidence_below_threshold": "trade_blocked_by_filters",
+                        "risk_reward_below_threshold": "trade_blocked_by_filters",
+                        "weak_or_medium_signal": "trade_blocked_by_filters",
+                    }
+                    mapped = rejection_map.get(qualifier_reason)
+                    if mapped:
+                        alert_type = "rejected_signal_alert"
+                        sent, send_reason = notifier.send_recommendation_alert(recommendation, alert_type=mapped)
+                        alert_status = "sent" if sent else "failed"
+                        alert_reason = send_reason if sent else qualifier_reason
 
                 if recommendation.market_status == "mt5_unavailable":
                     print("MT5 appears disconnected; will retry next cycle.")
@@ -281,6 +300,7 @@ def run(engine: RecommendationEngine, args: argparse.Namespace, settings: Any | 
                     sent=sent,
                     status=alert_status,
                     reason=alert_reason,
+                    alert_type=alert_type,
                 )
 
             except Exception as exc:

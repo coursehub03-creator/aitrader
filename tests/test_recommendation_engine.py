@@ -280,6 +280,8 @@ def test_final_recommendation_has_operator_output_fields() -> None:
         "selected_strategy",
         "market_status",
         "news_status",
+        "spread_state",
+        "session_state",
         "mt5_connection_status",
         "signal_strength",
         "rejection_reason",
