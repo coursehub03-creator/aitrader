@@ -102,6 +102,10 @@ class FinalRecommendation:
     market_status: str
     news_status: str
     mt5_connection_status: str = "unknown"
+    signal_strength: str = "weak"
+    rejection_reason: str | None = None
+    volatility_state: str = "normal"
+    next_news_event: dict[str, Any] | None = None
     reasons: list[str] = field(default_factory=list)
     timestamp: datetime = field(default_factory=datetime.utcnow)
 

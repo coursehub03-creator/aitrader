@@ -66,6 +66,10 @@ def _recommendation_to_dict(recommendation: Any) -> dict[str, Any]:
         "take_profit": recommendation.take_profit,
         "confidence": recommendation.confidence,
         "risk_reward": recommendation.risk_reward,
+        "signal_strength": getattr(recommendation, "signal_strength", "weak"),
+        "rejection_reason": getattr(recommendation, "rejection_reason", None),
+        "volatility_state": getattr(recommendation, "volatility_state", "normal"),
+        "next_news_event": getattr(recommendation, "next_news_event", None),
         "reasons": recommendation.reasons,
     }
 
