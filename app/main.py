@@ -68,6 +68,11 @@ def build_parser() -> argparse.ArgumentParser:
         default=None,
         help="Optional alert cooldown in seconds (overrides settings)",
     )
+    parser.add_argument(
+        "--test-telegram",
+        action="store_true",
+        help="Send a Telegram test message and exit",
+    )
     return parser
 
 
@@ -210,6 +215,30 @@ def build_engine(settings: Any) -> RecommendationEngine:
 
 def _build_telegram_notifier(settings: Any) -> TelegramNotifier:
     return TelegramNotifier.from_settings(settings)
+
+
+def _run_telegram_test(settings: Any) -> None:
+    notifier = _build_telegram_notifier(settings)
+    if not notifier.config.bot_token or not notifier.config.chat_id:
+        message = "Telegram not configured. Check TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID"
+        LOGGER.error(message)
+        print(message)
+        return
+
+    sent, reason = notifier.send_test_message("Telegram connection successful")
+    if sent:
+        LOGGER.info("Telegram test message sent successfully.")
+        print("Telegram connection successful")
+        return
+
+    if reason == "telegram_not_configured":
+        message = "Telegram not configured. Check TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID"
+        LOGGER.error(message)
+        print(message)
+        return
+
+    LOGGER.error("Telegram test message failed: %s", reason)
+    print(f"Telegram test failed: {reason}")
 
 
 def run(engine: RecommendationEngine, args: argparse.Namespace, settings: Settings | dict[str, Any] | None = None) -> None:
@@ -357,6 +386,10 @@ def main() -> None:
     args = build_parser().parse_args()
     settings = load_settings(args.settings)
     configure_logging(settings.get("app.log_level", "INFO"))
+
+    if args.test_telegram:
+        _run_telegram_test(settings)
+        return
 
     engine = build_engine(settings)
     run(engine, args, settings=settings)

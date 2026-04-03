@@ -158,3 +158,7 @@ class TelegramNotifier:
         if not self.config.send_summary_alerts:
             return False, "summary_alerts_disabled"
         return self._send_raw(self.build_summary_message(summary))
+
+    def send_test_message(self, text: str = "Telegram connection successful") -> tuple[bool, str]:
+        """Send a simple connectivity test message to Telegram."""
+        return self._send_raw(text)
