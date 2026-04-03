@@ -96,6 +96,7 @@ class FinalRecommendation:
     confidence: float
     strategy_name: str
     selected_strategy_name: str
+    market_status: str
     news_status: str
     reasons: list[str] = field(default_factory=list)
     timestamp: datetime = field(default_factory=datetime.utcnow)

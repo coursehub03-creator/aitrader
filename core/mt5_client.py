@@ -176,6 +176,71 @@ class MT5Client:
         """Backward-compatible alias for fetch_rates()."""
         return self.fetch_rates(symbol, timeframe, bars)
 
+    def detect_market_status(self, symbol: str, timeframe: str) -> tuple[str, str]:
+        """Return market status and reason for a symbol/timeframe pair.
+
+        Status values:
+        - open
+        - closed
+        - unavailable
+        - mt5_unavailable
+        """
+        if mt5 is None or not self.connected:
+            self.status_message = "MT5 is not connected"
+            return "mt5_unavailable", self.status_message
+
+        if not self.ensure_symbol_selected(symbol):
+            return "unavailable", self.status_message
+
+        info = mt5.symbol_info(symbol)
+        if info is None:
+            self.status_message = f"Symbol '{symbol}' is not available in MT5 terminal"
+            return "unavailable", self.status_message
+
+        trade_mode = getattr(info, "trade_mode", None)
+        disabled_mode = getattr(mt5, "SYMBOL_TRADE_MODE_DISABLED", None)
+        if disabled_mode is not None and trade_mode == disabled_mode:
+            self.status_message = f"Symbol '{symbol}' is not tradable in MT5 terminal"
+            return "unavailable", self.status_message
+
+        try:
+            mt5_tf = self.timeframe_to_mt5_constant(timeframe)
+        except ValueError as exc:
+            self.status_message = str(exc)
+            return "unavailable", self.status_message
+
+        timeframe_seconds = self._timeframe_seconds(timeframe)
+        stale_after = max(300, timeframe_seconds * 3)
+        now_ts = int(datetime.utcnow().timestamp())
+
+        tick_fetch = getattr(mt5, "symbol_info_tick", None)
+        if callable(tick_fetch):
+            try:
+                tick = tick_fetch(symbol)
+            except Exception:
+                tick = None
+            tick_time = int(getattr(tick, "time", 0) or 0) if tick is not None else 0
+            if tick_time and (now_ts - tick_time) <= stale_after:
+                return "open", "Recent MT5 tick confirms market is open"
+
+        try:
+            rates = mt5.copy_rates_from_pos(symbol, mt5_tf, 0, 2)
+        except Exception as exc:
+            self.status_message = f"Failed to fetch market status candles for {symbol}/{timeframe}: {exc}"
+            LOGGER.exception(self.status_message)
+            return "closed", self.status_message
+
+        if rates is None or len(rates) == 0:
+            self.status_message = f"No recent rates for {symbol}/{timeframe}; market likely closed"
+            return "closed", self.status_message
+
+        latest_time = int(rates[-1]["time"]) if isinstance(rates[-1], dict) else int(rates[-1].time)
+        if (now_ts - latest_time) <= stale_after:
+            return "open", "Recent MT5 candles confirm market is open"
+
+        self.status_message = f"Latest rate for {symbol}/{timeframe} is stale; market likely closed"
+        return "closed", self.status_message
+
     def fetch_multi_timeframe_rates(
         self,
         symbol: str,
@@ -219,6 +284,19 @@ class MT5Client:
                     return tf
 
         raise ValueError(f"Unknown MT5 timeframe constant: {constant}")
+
+    @staticmethod
+    def _timeframe_seconds(timeframe: str) -> int:
+        mapping = {
+            "M1": 60,
+            "M5": 300,
+            "M15": 900,
+            "M30": 1800,
+            "H1": 3600,
+            "H4": 14400,
+            "D1": 86400,
+        }
+        return mapping.get(timeframe.upper(), 300)
 
     @staticmethod
     def _to_ohlcv_dataframe(rates: Any) -> pd.DataFrame:
