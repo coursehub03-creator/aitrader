@@ -15,6 +15,7 @@ if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
 from core.types import FinalRecommendation, SignalAction
+from monitoring.live_monitor import MonitorState, to_utc_label
 from ui.charting import ChartControls, build_market_figure, prepare_chart_payload
 from ui.dashboard_service import DashboardService
 from ui.terminal_view_model import (
@@ -73,15 +74,22 @@ def ensure_state() -> None:
         "latest_alert_reason": "",
         "latest_alert_type": "n/a",
         "alert_suppressed_reason": "",
-        "monitoring_state": "idle",
+        "monitoring_state": "stopped",
         "watch_mode": False,
-        "auto_refresh": False,
+        "monitor_running": False,
+        "monitor_cycle_id": 0,
+        "monitor_next_refresh_label": "Never",
+        "monitor_last_alert_label": "Never",
+        "monitor_last_market_status": "unknown",
+        "monitor_last_news_status": "unknown",
+        "auto_refresh": True,
         "refresh_interval": 15,
         "compact_mode": False,
         "expanded_chart": False,
         "recommendation_history": [],
         "optimizer_output": pd.DataFrame(),
         "validation_output": pd.DataFrame(),
+        "monitor_runtime": MonitorState(),
     }
     for k, v in defaults.items():
         if k not in st.session_state:
@@ -97,7 +105,10 @@ def normalize_recommendation(recommendation: FinalRecommendation) -> FinalRecomm
 
 
 def run_cycle(service: DashboardService, symbol: str, timeframe: str, watch_mode: bool) -> FinalRecommendation:
-    recommendation = normalize_recommendation(service.generate_recommendation(symbol, timeframe))
+    st.session_state.monitor_cycle_id += 1
+    cycle_id = int(st.session_state.monitor_cycle_id)
+    recommendation, monitor_meta = service.run_monitor_cycle(symbol, timeframe, watch_mode=watch_mode, cycle_id=cycle_id)
+    recommendation = normalize_recommendation(recommendation)
     st.session_state.last_recommendation = recommendation
     st.session_state.recommendations_by_symbol[symbol] = recommendation
     st.session_state.last_refresh_label = utc_now_label()
@@ -114,17 +125,14 @@ def run_cycle(service: DashboardService, symbol: str, timeframe: str, watch_mode
         }
     ] + st.session_state.recommendation_history)[:200]
 
-    if watch_mode:
-        status, reason, triggered, alert_type = service.evaluate_and_send_alert(recommendation)
-        service.persist_alert_event(recommendation, status, reason, triggered, alert_type)
-        st.session_state.latest_alert_status = status
-        st.session_state.latest_alert_reason = reason
-        st.session_state.latest_alert_type = alert_type
-        st.session_state.alert_suppressed_reason = reason if status == "suppressed" else ""
-    else:
-        st.session_state.latest_alert_status = "not_evaluated"
-        st.session_state.latest_alert_reason = "watch mode disabled"
-        st.session_state.latest_alert_type = "n/a"
+    st.session_state.latest_alert_status = monitor_meta["alert_status"]
+    st.session_state.latest_alert_reason = monitor_meta["alert_reason"]
+    st.session_state.latest_alert_type = monitor_meta["alert_type"]
+    st.session_state.alert_suppressed_reason = (
+        monitor_meta["alert_reason"] if monitor_meta["alert_status"] == "suppressed" else ""
+    )
+    st.session_state.monitor_last_market_status = monitor_meta["market_status"]
+    st.session_state.monitor_last_news_status = monitor_meta["news_status"]
     return recommendation
 
 
@@ -438,8 +446,9 @@ def sidebar_controls() -> None:
     st.session_state.compact_mode = st.sidebar.toggle("Compact mode", value=st.session_state.compact_mode)
     st.session_state.expanded_chart = st.sidebar.toggle("Expanded chart", value=st.session_state.expanded_chart)
     st.session_state.watch_mode = st.sidebar.toggle("Watch mode", value=st.session_state.watch_mode)
-    st.session_state.auto_refresh = st.sidebar.toggle("Auto refresh", value=st.session_state.auto_refresh)
+    st.session_state.auto_refresh = st.sidebar.toggle("Auto refresh (stable scheduler)", value=st.session_state.auto_refresh)
     st.session_state.refresh_interval = int(st.sidebar.number_input("Live refresh (seconds)", min_value=3, max_value=3600, value=int(st.session_state.refresh_interval), step=1))
+    st.session_state.monitor_running = st.sidebar.toggle("Monitor running", value=st.session_state.monitor_running)
     st.session_state.run_now = st.sidebar.button("Run cycle now", type="primary", use_container_width=True)
     st.session_state.refresh_now = st.sidebar.button("Refresh market data", use_container_width=True)
     st.session_state.run_optimizer_now = st.sidebar.button("Run optimizer", use_container_width=True)
@@ -448,13 +457,29 @@ def sidebar_controls() -> None:
 
 def handle_refresh() -> None:
     if st.session_state.auto_refresh:
-        interval_ms = int(st.session_state.refresh_interval) * 1000
+        interval_ms = min(5000, int(st.session_state.refresh_interval) * 1000)
         try:
             from streamlit_autorefresh import st_autorefresh  # type: ignore
 
             st_autorefresh(interval=interval_ms, key="terminal_live_refresh")
         except Exception:
-            st.markdown(f"<meta http-equiv='refresh' content='{st.session_state.refresh_interval}'>", unsafe_allow_html=True)
+            pass
+
+
+def render_monitor_state() -> None:
+    runtime: MonitorState = st.session_state.monitor_runtime
+    cols = st.columns(5, gap="small")
+    cols[0].metric("Monitor", "RUNNING" if runtime.is_running else "STOPPED")
+    cols[1].metric("Last refresh", st.session_state.last_refresh_label)
+    cols[2].metric("Next refresh", st.session_state.monitor_next_refresh_label)
+    cols[3].metric("Last alert", st.session_state.monitor_last_alert_label)
+    cols[4].metric("Cycle #", int(st.session_state.monitor_cycle_id))
+    st.caption(
+        "Monitor status — "
+        f"market: {st.session_state.monitor_last_market_status} | "
+        f"news: {st.session_state.monitor_last_news_status} | "
+        f"alert: {st.session_state.latest_alert_status}"
+    )
 
 
 def main() -> None:
@@ -481,11 +506,28 @@ def main() -> None:
         expanded_chart=st.session_state.expanded_chart,
     )
 
-    if st.session_state.run_now or st.session_state.auto_refresh:
+    runtime: MonitorState = st.session_state.monitor_runtime
+    runtime.interval_seconds = max(3, int(state.refresh_interval))
+    now = datetime.now(tz=timezone.utc)
+    if st.session_state.monitor_running:
+        if not runtime.is_running:
+            runtime.start(now)
         st.session_state.monitoring_state = "running" if state.watch_mode else "polling"
-        run_cycle(service, state.symbol, state.timeframe, state.watch_mode)
     else:
-        st.session_state.monitoring_state = "idle"
+        runtime.stop()
+        st.session_state.monitoring_state = "stopped"
+
+    if st.session_state.run_now:
+        run_cycle(service, state.symbol, state.timeframe, state.watch_mode)
+        runtime.mark_cycle_complete(interval_seconds=state.refresh_interval)
+        runtime.mark_alert(status=st.session_state.latest_alert_status)
+    elif runtime.should_run_cycle(now):
+        run_cycle(service, state.symbol, state.timeframe, state.watch_mode)
+        runtime.mark_cycle_complete(interval_seconds=state.refresh_interval)
+        runtime.mark_alert(status=st.session_state.latest_alert_status)
+
+    st.session_state.monitor_next_refresh_label = to_utc_label(runtime.next_refresh_at)
+    st.session_state.monitor_last_alert_label = to_utc_label(runtime.last_alert_at)
 
     if st.session_state.refresh_now:
         _load_chart_candles.clear()
@@ -502,6 +544,7 @@ def main() -> None:
         st.session_state.validation_output = validation_table
 
     top_tabs = st.tabs(["Trading Cockpit", "Market Visuals", "Self-Learning Center"])
+    render_monitor_state()
 
     with top_tabs[0]:
         render_trading_cockpit(service, state, rec)

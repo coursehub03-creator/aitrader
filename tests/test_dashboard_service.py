@@ -244,6 +244,45 @@ def test_optimizer_leaderboard_by_symbol_reads_report(tmp_path) -> None:
     assert board.loc[0, "symbol"] == "EURUSD"
 
 
+def test_run_monitor_cycle_executes_pipeline_and_persists(tmp_path) -> None:
+    service = DashboardService.__new__(DashboardService)
+    service.monitor_cycles_path = tmp_path / "ui_monitor_cycles.jsonl"
+
+    rec = FinalRecommendation(
+        symbol="EURUSD",
+        timeframe="M5",
+        action=SignalAction.BUY,
+        market_price=1.1,
+        entry=1.1,
+        stop_loss=1.09,
+        take_profit=1.12,
+        risk_reward=2.0,
+        confidence=0.75,
+        selected_strategy="trend_rsi",
+        market_status="open",
+        news_status="clear",
+        reasons=["trend aligned"],
+        timestamp=datetime(2026, 1, 1),
+    )
+
+    service.refresh_market_data = lambda *_args, **_kwargs: (pd.DataFrame([{"close": 1.1}]), "Market data refreshed")
+    service.connection_status = lambda *_args, **_kwargs: ("open", "ok")
+    service.generate_recommendation = lambda *_args, **_kwargs: rec
+    service.recent_news_events = lambda *_args, **_kwargs: []
+    service.evaluate_and_send_alert = lambda *_args, **_kwargs: ("suppressed", "not qualified", False, "strong_trade_alert")
+    service.persist_alert_event = lambda *_args, **_kwargs: None
+
+    out_rec, meta = service.run_monitor_cycle("EURUSD", "M5", watch_mode=True, cycle_id=7)
+    assert out_rec.symbol == "EURUSD"
+    assert meta["market_status"] == "open"
+    assert meta["news_status"] == "clear_no_events"
+    assert meta["alert_status"] == "suppressed"
+
+    lines = service.monitor_cycles_path.read_text(encoding="utf-8").strip().splitlines()
+    assert len(lines) == 1
+    assert '"cycle_id": 7' in lines[0]
+
+
 def test_evaluate_and_send_alert_suppresses_by_duplicate_history(tmp_path, monkeypatch) -> None:
     service = DashboardService.__new__(DashboardService)
     service.alert_state_path = tmp_path / "alert_state.json"

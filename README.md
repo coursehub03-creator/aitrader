@@ -77,10 +77,13 @@ The Streamlit UI now ships with a denser **trading-terminal style workspace**:
 #### Watch mode + live chart refresh
 
 - Use **Run cycle now** for manual update.
-- Enable **Auto refresh** to run recurring cycles using a configurable interval.
+- Enable **Monitor running** for continuous monitoring on an interval.
+- Enable **Auto refresh (stable scheduler)** for reliable UI reruns while monitor scheduling is handled in session state.
 - Enable **Watch mode** to evaluate/send alerts each cycle.
 - Every refresh updates recommendation, chart overlays, market/news status, watchlist snapshots, and alert/history panels.
 - Session state preserves selected symbol/timeframe and operator toggles during refresh.
+- Monitor state panel exposes running/stopped status, last refresh, next refresh, last alert time, and current cycle counter.
+- Monitor-cycle logs are persisted to `logs/ui_monitor_cycles.jsonl` for daily operations auditability.
 
 #### Current limitations vs full trading terminals
 
