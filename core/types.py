@@ -57,23 +57,30 @@ class StrategySignal:
 class PaperTradeResult:
     strategy_name: str
     symbol: str
-    action: str
+    side: str
     entry: float
     exit_price: float
+    stop_loss: float
+    take_profit: float
+    open_time: datetime
+    close_time: datetime
+    outcome: str
     pnl: float
     is_win: bool
-    timestamp: datetime
 
 
 @dataclass(slots=True)
 class StrategyScore:
     strategy_name: str
     score: float
-    profit: float
+    net_pnl: float
     trades: int
     max_drawdown: float
     win_rate: float
+    loss_rate: float
+    average_pnl: float
     profit_factor: float
+    expectancy: float
 
 
 @dataclass(slots=True)

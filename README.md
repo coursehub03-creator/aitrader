@@ -22,7 +22,8 @@ A production-ready Python project for **AI-assisted trading recommendations** us
   - Breakout + ATR
 - Normalized strategy signals (`BUY` / `SELL` / `NO_TRADE`) with entry/SL/TP/confidence/reasons
 - Paper trade simulator
-- Strategy evaluator and score ranking
+- Structured paper-trade persistence (CSV/SQLite)
+- Strategy evaluator and leaderboard with risk filters
 - Grid-search parameter optimizer
 - Modular architecture for long-term development
 
@@ -56,3 +57,24 @@ tests/              # Unit tests
   (`news.symbols_map`) with a fallback split (e.g. `EURUSD -> EUR, USD`).
 - If a provider is unavailable, the engine logs warnings and continues safely
   with no news events instead of crashing.
+## Paper Trading + Evaluation
+
+- `core.paper_trading.PaperTrader` simulates opening and closing paper trades using
+  entry/SL/TP logic over lookahead candles.
+- Trade records include:
+  `entry`, `exit_price`, `stop_loss`, `take_profit`, `side`, `open_time`,
+  `close_time`, `outcome`, and `pnl`.
+- `core.paper_trading.TradeStore` saves structured paper trades to:
+  - CSV (`save_csv`)
+  - SQLite (`save_sqlite`)
+- `learning.evaluator.PerformanceEvaluator` builds a strategy leaderboard with:
+  - total trades
+  - win rate
+  - loss rate
+  - net pnl
+  - average pnl
+  - max drawdown
+  - profit factor
+  - expectancy
+- Leaderboard excludes strategies that have too few trades (`min_trades`) or too
+  much drawdown (`max_drawdown_limit`).
