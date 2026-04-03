@@ -32,6 +32,7 @@ A production-ready Python project for **AI-assisted trading recommendations** us
 
 ```text
 app/                # CLI entrypoint
+api/                # FastAPI service layer for terminal frontend migration
 core/               # MT5 client, indicators, paper trading, shared types
 news/               # News provider abstraction + ForexFactory provider + filter
 strategy/           # Strategy interface + TrendRSI + BreakoutATR
@@ -40,7 +41,8 @@ recommendation/     # Recommendation orchestration engine
 config/             # settings.yaml
 logs/               # Runtime artifacts (e.g. paper_trade_results.jsonl)
 tests/              # Unit tests
-ui/                 # Streamlit operator dashboard
+ui/                 # Streamlit operator dashboard (current production UI)
+frontend/next-terminal/ # Next.js scaffold for trading-terminal replacement
 ```
 
 ## Streamlit Operator Dashboard (Local)
@@ -197,6 +199,42 @@ The chart layer reuses existing backend data sources (`MT5` candles, recommendat
 - Best symbol-level configurations are refreshed from active strategy rankings.
 - Learning health freshness uses timestamps from optimization, validation, and paper-trade updates.
 
+
+### Incremental Migration Architecture (FastAPI + Next.js)
+
+A migration-friendly service/UI split is now scaffolded so the current Streamlit dashboard can coexist with a modern frontend.
+
+#### FastAPI service domains
+
+- `GET /recommendations/latest` → latest recommendation payload
+- `GET /market/candles` → chart-ready candles from MT5
+- `GET/POST/DELETE /watchlist` → watchlist state management
+- `GET /paper-trades` → paper trade history feed
+- `GET /learning/center` → learning center health + events
+- `GET /alerts/history` → alert/audit timeline
+
+#### Next.js frontend scaffold domains
+
+- Live chart workspace (`features/charts`)
+- Watchlist (`features/watchlist`)
+- Recommendation side panel (`features/recommendations`)
+- Alerts/history panel (`features/alerts`)
+- Self-learning center (`features/learning`)
+
+#### Charting strategy for TradingView-like UX
+
+- Base charting library scaffolded with `lightweight-charts` for low-latency, production-grade candlestick rendering
+- Keep chart interactions and layout in frontend feature modules
+- Keep trading decision logic and market/news gating in backend services
+
+#### Migration plan (incremental, no Streamlit removal yet)
+
+1. **Phase 1 (Now):** keep Streamlit as primary UI, add FastAPI endpoints and Next.js skeleton.
+2. **Phase 2:** wire each Next.js feature slice to FastAPI payloads and parity-check against Streamlit panels.
+3. **Phase 3:** move advanced interactions (multi-panel docking, richer chart tools, event timelines) into Next.js.
+4. **Phase 4:** freeze Streamlit feature development, keep it as fallback operator console.
+5. **Phase 5:** make web terminal primary, retire Streamlit only after operational parity and runbook sign-off.
+
 ### Run locally
 
 1. Install dependencies:
@@ -212,6 +250,21 @@ streamlit run ui/app.py
 ```
 
 > Keep MetaTrader 5 open to enable live MT5 market access. If MT5 is closed or unavailable, the dashboard will safely show `mt5_unavailable` and continue running without crashing.
+
+
+### Run FastAPI service (new migration layer)
+
+```bash
+uvicorn api.app:app --reload --port 8000
+```
+
+### Run Next.js terminal scaffold
+
+```bash
+cd frontend/next-terminal
+npm install
+npm run dev
+```
 
 ### Watch mode in Streamlit
 
