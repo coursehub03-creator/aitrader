@@ -62,6 +62,7 @@ def main() -> None:
         symbol=args.symbol.upper(),
         timeframe=args.timeframe.upper(),
     )
+    print(engine.format_for_terminal(recommendation))
     print(json.dumps(asdict(recommendation), indent=2, default=str))
 
 

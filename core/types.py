@@ -87,10 +87,12 @@ class StrategyScore:
 class FinalRecommendation:
     symbol: str
     timeframe: str
-    action: str
+    final_action: str
     entry: float
     stop_loss: float
     take_profit: float
     confidence: float
-    reason: str
-    contributing_strategies: list[str] = field(default_factory=list)
+    strategy_name: str
+    news_status: str
+    reasons: list[str] = field(default_factory=list)
+    timestamp: datetime = field(default_factory=datetime.utcnow)

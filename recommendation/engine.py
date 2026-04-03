@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 import logging
-from datetime import timedelta
+from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any
 
@@ -43,13 +43,14 @@ class RecommendationEngine:
         self.results_path.parent.mkdir(parents=True, exist_ok=True)
 
     def generate(self, symbol: str, timeframe: str) -> FinalRecommendation:
+        run_timestamp = datetime.utcnow()
         self.mt5.connect()
         try:
             if not self.mt5.connected:
-                return self._no_trade(symbol, timeframe, self.mt5.status_message)
+                return self._no_trade(symbol, timeframe, self.mt5.status_message, "unavailable", run_timestamp)
 
             if not self.mt5.ensure_symbol(symbol):
-                return self._no_trade(symbol, timeframe, self.mt5.status_message)
+                return self._no_trade(symbol, timeframe, self.mt5.status_message, "unavailable", run_timestamp)
 
             candles = self.mt5.get_ohlcv(
                 symbol,
@@ -58,17 +59,32 @@ class RecommendationEngine:
             )
             if candles.empty:
                 reason = self.mt5.status_message or f"No market data for {symbol}/{timeframe}"
-                return self._no_trade(symbol, timeframe, reason)
+                return self._no_trade(symbol, timeframe, reason, "unavailable", run_timestamp)
 
-            blocked, reason, confidence_multiplier = self._news_gate(symbol)
+            blocked, news_status, reason, confidence_multiplier = self._news_gate(symbol)
             if blocked:
-                return self._no_trade(symbol, timeframe, reason)
+                return self._no_trade(symbol, timeframe, reason, news_status, run_timestamp)
 
             strategy_outputs = self._run_strategies(symbol, candles)
             if not strategy_outputs:
-                return self._no_trade(symbol, timeframe, "No strategy produced an actionable signal")
+                return self._no_trade(
+                    symbol,
+                    timeframe,
+                    "No strategy produced an actionable signal",
+                    news_status,
+                    run_timestamp,
+                )
 
-            return self._aggregate(symbol, timeframe, strategy_outputs, confidence_multiplier)
+            recommendation = self._aggregate(
+                symbol,
+                timeframe,
+                strategy_outputs,
+                confidence_multiplier,
+                news_status,
+                run_timestamp,
+            )
+            LOGGER.info("Final recommendation generated\n%s", self.format_for_terminal(recommendation))
+            return recommendation
 
         finally:
             self.mt5.shutdown()
@@ -150,7 +166,7 @@ class RecommendationEngine:
 
         return {strategy.name for strategy in self.strategies}
 
-    def _news_gate(self, symbol: str) -> tuple[bool, str, float]:
+    def _news_gate(self, symbol: str) -> tuple[bool, str, str, float]:
         now = self.mt5.now()
         try:
             events = self.news_provider.fetch_events(
@@ -166,12 +182,12 @@ class RecommendationEngine:
 
         if decision.decision == "block trading":
             LOGGER.info("Recommendation blocked by news filter: %s", decision.reason)
-            return True, decision.reason, decision.confidence_multiplier
+            return True, decision.decision, decision.reason, decision.confidence_multiplier
 
         if decision.decision == "reduce confidence":
             LOGGER.info("Recommendation confidence reduced by news filter: %s", decision.reason)
 
-        return False, decision.reason, decision.confidence_multiplier
+        return False, decision.decision, decision.reason, decision.confidence_multiplier
 
     def _aggregate(
         self,
@@ -179,12 +195,20 @@ class RecommendationEngine:
         timeframe: str,
         strategy_outputs: list[tuple[StrategySignal, StrategyScore | None]],
         confidence_multiplier: float = 1.0,
+        news_status: str = "allow trading",
+        timestamp: datetime | None = None,
     ) -> FinalRecommendation:
         buys = [item for item in strategy_outputs if item[0].action == SignalAction.BUY]
         sells = [item for item in strategy_outputs if item[0].action == SignalAction.SELL]
 
         if buys and sells:
-            return self._no_trade(symbol, timeframe, "Conflicting strategy directions")
+            return self._no_trade(
+                symbol,
+                timeframe,
+                "Conflicting strategy directions",
+                news_status,
+                timestamp or datetime.utcnow(),
+            )
 
         selected = buys if buys else sells
 
@@ -194,13 +218,31 @@ class RecommendationEngine:
         entry_vals: list[float] = []
         sl_vals: list[float] = []
         tp_vals: list[float] = []
-        reasons: list[str] = []
+        reasons: list[str] = [f"News status: {news_status}"]
         names: list[str] = []
+        excluded_names: list[str] = []
+        weak_cutoff = float(self.settings.get("learning.weak_strategy_score_cutoff", 1.0))
+        weak_reduction = float(self.settings.get("learning.weak_strategy_confidence_multiplier", 0.75))
+        if weak_reduction < 0:
+            weak_reduction = 0.0
 
         for signal, score in selected:
+            perf_weight = 1.0
+            if score is not None and score.score < weak_cutoff:
+                if score.score <= 0:
+                    excluded_names.append(signal.strategy_name)
+                    reasons.append(
+                        f"{signal.strategy_name} excluded due to weak recent performance score={score.score:.2f}"
+                    )
+                    continue
+                perf_weight = weak_reduction
+                reasons.append(
+                    f"{signal.strategy_name} confidence reduced due to weak recent performance score={score.score:.2f}"
+                )
+
             weight = max(1.0, score.score / 10.0) if score else 1.0
 
-            confidence_weighted += signal.confidence * weight
+            confidence_weighted += signal.confidence * perf_weight * weight
             weight_total += weight
 
             entry_vals.append(signal.entry)
@@ -210,31 +252,68 @@ class RecommendationEngine:
             reasons.append(f"{signal.strategy_name}: {signal.reason}")
             names.append(signal.strategy_name)
 
+        if not names:
+            reason = (
+                "All strategies excluded due to weak recent performance"
+                if excluded_names
+                else "No strategies available after aggregation"
+            )
+            return self._no_trade(symbol, timeframe, reason, news_status, timestamp or datetime.utcnow())
+
         return FinalRecommendation(
             symbol=symbol,
             timeframe=timeframe,
-            action=selected[0][0].action,
+            final_action=selected[0][0].action,
             entry=float(sum(entry_vals) / len(entry_vals)),
             stop_loss=float(sum(sl_vals) / len(sl_vals)),
             take_profit=float(sum(tp_vals) / len(tp_vals)),
             confidence=float((confidence_weighted / weight_total) * confidence_multiplier),
-            reason=" | ".join(reasons),
-            contributing_strategies=names,
+            strategy_name=names[0] if len(names) == 1 else "+".join(names),
+            news_status=news_status,
+            reasons=reasons,
+            timestamp=timestamp or datetime.utcnow(),
         )
 
     @staticmethod
-    def _no_trade(symbol: str, timeframe: str, reason: str) -> FinalRecommendation:
+    def _no_trade(
+        symbol: str,
+        timeframe: str,
+        reason: str,
+        news_status: str,
+        timestamp: datetime,
+    ) -> FinalRecommendation:
         return FinalRecommendation(
-            symbol,
-            timeframe,
-            "No Trade",
-            0.0,
-            0.0,
-            0.0,
-            0.0,
-            reason,
-            [],
+            symbol=symbol,
+            timeframe=timeframe,
+            final_action=SignalAction.NO_TRADE,
+            entry=0.0,
+            stop_loss=0.0,
+            take_profit=0.0,
+            confidence=0.0,
+            strategy_name="none",
+            news_status=news_status,
+            reasons=[reason],
+            timestamp=timestamp,
         )
+
+    @staticmethod
+    def format_for_terminal(recommendation: FinalRecommendation) -> str:
+        lines = [
+            "=== Final Recommendation ===",
+            f"Symbol:      {recommendation.symbol}",
+            f"Timeframe:   {recommendation.timeframe}",
+            f"Action:      {recommendation.final_action}",
+            f"Entry:       {recommendation.entry:.5f}",
+            f"Stop Loss:   {recommendation.stop_loss:.5f}",
+            f"Take Profit: {recommendation.take_profit:.5f}",
+            f"Confidence:  {recommendation.confidence:.2%}",
+            f"Strategy:    {recommendation.strategy_name}",
+            f"News:        {recommendation.news_status}",
+            f"Timestamp:   {recommendation.timestamp.isoformat()}",
+            "Reasons:",
+        ]
+        lines.extend([f"  - {reason}" for reason in recommendation.reasons] or ["  - n/a"])
+        return "\n".join(lines)
 
     def _persist_signal(self, symbol: str, signal: StrategySignal) -> None:
         with self.results_path.open("a", encoding="utf-8") as handle:

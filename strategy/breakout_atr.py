@@ -39,7 +39,7 @@ class BreakoutATRStrategy(BaseStrategy):
             return StrategySignal.no_trade(self.name, "ATR is not available", entry=price)
 
         high_break, low_break = breakout_levels(data, lookback)
-        confidence = float(params["base_confidence"])
+        confidence = float(params.get("base_confidence", 0.59))
 
         if is_breakout_up(price, high_break):
             sl = price - atr_value * params["atr_sl_multiplier"]
