@@ -5,7 +5,10 @@ from __future__ import annotations
 import argparse
 import json
 import logging
+import time
 from datetime import timezone
+from pathlib import Path
+from typing import Any
 
 from config_loader import load_settings
 from core.mt5_client import MT5Client
@@ -17,6 +20,7 @@ from recommendation.engine import RecommendationEngine
 from strategy.registry import create_default_strategies
 
 LOGGER = logging.getLogger(__name__)
+MONITOR_LOG_PATH = Path("logs/monitor_cycles.jsonl")
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -27,17 +31,59 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--symbol", required=True, help="Symbol like EURUSD")
     parser.add_argument("--timeframe", default="M5", help="M1/M5/M15/M30/H1/H4/D1")
     parser.add_argument("--settings", default="config/settings.yaml", help="Path to settings YAML")
+    parser.add_argument(
+        "--watch",
+        action="store_true",
+        help="Continuously regenerate recommendations on an interval",
+    )
+    parser.add_argument(
+        "--interval",
+        type=int,
+        default=300,
+        help="Watch mode interval in seconds (default: 300)",
+    )
     return parser
 
 
-def main() -> None:
-    """Run the recommendation CLI and print JSON output."""
-    args = build_parser().parse_args()
+def _recommendation_to_dict(recommendation: Any) -> dict[str, Any]:
+    action = recommendation.action.value if hasattr(recommendation.action, "value") else recommendation.action
+    return {
+        "symbol": recommendation.symbol,
+        "timeframe": recommendation.timeframe,
+        "timestamp": recommendation.timestamp.replace(tzinfo=timezone.utc).isoformat(),
+        "market_status": recommendation.market_status,
+        "news_status": recommendation.news_status,
+        "selected_strategy": recommendation.selected_strategy,
+        "action": action,
+        "entry": recommendation.entry,
+        "stop_loss": recommendation.stop_loss,
+        "take_profit": recommendation.take_profit,
+        "confidence": recommendation.confidence,
+        "risk_reward": recommendation.risk_reward,
+        "reasons": recommendation.reasons,
+    }
 
-    settings = load_settings(args.settings)
-    configure_logging(settings.get("app.log_level", "INFO"))
 
-    engine = RecommendationEngine(
+def _persist_cycle_result(
+    recommendation: Any | None,
+    cycle: int,
+    interval_seconds: int,
+    error: str | None = None,
+) -> None:
+    MONITOR_LOG_PATH.parent.mkdir(parents=True, exist_ok=True)
+    payload: dict[str, Any] = {
+        "cycle": cycle,
+        "interval_seconds": interval_seconds,
+        "error": error,
+    }
+    if recommendation is not None:
+        payload["recommendation"] = _recommendation_to_dict(recommendation)
+    with MONITOR_LOG_PATH.open("a", encoding="utf-8") as handle:
+        handle.write(json.dumps(payload) + "\n")
+
+
+def build_engine(settings: Any) -> RecommendationEngine:
+    return RecommendationEngine(
         mt5_client=MT5Client(),
         news_provider=build_news_provider(settings),
         news_filter=NewsFilter(
@@ -59,31 +105,47 @@ def main() -> None:
         ),
     )
 
-    recommendation = engine.generate(
-        symbol=args.symbol.upper(),
-        timeframe=args.timeframe.upper(),
-    )
-    print(engine.format_for_terminal(recommendation))
-    print(
-        json.dumps(
-            {
-                "symbol": recommendation.symbol,
-                "timeframe": recommendation.timeframe,
-                "timestamp": recommendation.timestamp.replace(tzinfo=timezone.utc).isoformat(),
-                "market_status": recommendation.market_status,
-                "news_status": recommendation.news_status,
-                "selected_strategy": recommendation.selected_strategy,
-                "action": recommendation.action,
-                "entry": recommendation.entry,
-                "stop_loss": recommendation.stop_loss,
-                "take_profit": recommendation.take_profit,
-                "confidence": recommendation.confidence,
-                "risk_reward": recommendation.risk_reward,
-                "reasons": recommendation.reasons,
-            },
-            indent=2,
-        )
-    )
+
+def run(engine: RecommendationEngine, args: argparse.Namespace) -> None:
+    interval = max(1, int(args.interval))
+    cycle = 1
+    while True:
+        try:
+            recommendation = engine.generate(symbol=args.symbol.upper(), timeframe=args.timeframe.upper())
+            print(f"\n--- Cycle {cycle} ---")
+            print(f"Market status: {recommendation.market_status}")
+            is_news_blocked = recommendation.news_status == "blocked"
+            print(f"Trading blocked by news: {'yes' if is_news_blocked else 'no'}")
+            if recommendation.action != "NO_TRADE":
+                print(engine.format_for_terminal(recommendation))
+            else:
+                print("No actionable recommendation this cycle.")
+            if recommendation.market_status == "mt5_unavailable":
+                print("MT5 appears disconnected; will retry next cycle.")
+            print(json.dumps(_recommendation_to_dict(recommendation), indent=2))
+            _persist_cycle_result(recommendation, cycle=cycle, interval_seconds=interval)
+        except Exception as exc:  # defensive runtime loop for watch mode resilience
+            LOGGER.exception("Cycle %s failed while generating recommendation", cycle)
+            print(json.dumps({"error": f"Cycle {cycle} failed: {exc}"}, indent=2))
+            _persist_cycle_result(None, cycle=cycle, interval_seconds=interval, error=str(exc))
+            if not args.watch:
+                break
+
+        if not args.watch:
+            break
+
+        LOGGER.info("Sleeping %s seconds before next watch cycle", interval)
+        time.sleep(interval)
+        cycle += 1
+
+
+def main() -> None:
+    """Run the recommendation CLI and print JSON output."""
+    args = build_parser().parse_args()
+    settings = load_settings(args.settings)
+    configure_logging(settings.get("app.log_level", "INFO"))
+    engine = build_engine(settings)
+    run(engine, args)
 
 
 if __name__ == "__main__":

@@ -40,7 +40,50 @@ recommendation/     # Recommendation orchestration engine
 config/             # settings.yaml
 logs/               # Runtime artifacts (e.g. paper_trade_results.jsonl)
 tests/              # Unit tests
+ui/                 # Streamlit operator dashboard
 ```
+
+## Streamlit Operator Dashboard (Local)
+
+The project includes a premium local dashboard for manual decision support:
+
+- Recommendation Summary with highlighted action (`BUY` / `SELL` / `NO_TRADE`)
+- Market + news gating visibility (including blocked states)
+- Strategy diagnostics and reasons
+- Recent recommendation history (persisted locally)
+- Paper-trade simulation panel and trade history
+- Strategy leaderboard based on paper-trade outcomes
+- Debug/log panel for operator troubleshooting
+
+### Run locally
+
+1. Install dependencies:
+
+```bash
+pip install -r requirements.txt
+```
+
+2. Start the dashboard from the repository root:
+
+```bash
+streamlit run ui/app.py
+```
+
+> Keep MetaTrader 5 open to enable live MT5 market access. If MT5 is closed or unavailable, the dashboard will safely show `mt5_unavailable` and continue running without crashing.
+
+### Status meanings in the dashboard
+
+`market_status`:
+- `open`: Symbol is tradable and has recent market activity.
+- `closed`: Market/session appears closed; recommendation is forced to `NO_TRADE`.
+- `unavailable`: Symbol is missing/not tradable in MT5.
+- `mt5_unavailable`: MT5 package or terminal is not reachable.
+
+`news_status`:
+- `clear`: No blocking event in effect.
+- `blocked`: High-impact event blocks trading; action is forced to `NO_TRADE`.
+- `reduced_confidence`: News risk exists, recommendation remains but with lower confidence.
+- `unknown`: News provider failed or returned uncertain state.
 
 ## News Layer
 
