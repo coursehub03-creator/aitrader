@@ -3,10 +3,18 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
+from pathlib import Path
+import sys
 import traceback
 
 import pandas as pd
 import streamlit as st
+
+# Ensure project-root absolute imports resolve when launched as:
+#   streamlit run ui/app.py
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
+if str(PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(PROJECT_ROOT))
 
 from core.types import FinalRecommendation, SignalAction
 from ui.dashboard_service import DashboardService
