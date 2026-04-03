@@ -19,6 +19,7 @@ from news.symbols import currencies_for_symbol
 from strategy.base import TradingStrategy
 
 LOGGER = logging.getLogger(__name__)
+VALID_MARKET_STATUSES = {"open", "closed", "unavailable", "mt5_unavailable"}
 
 
 class RecommendationEngine:
@@ -57,9 +58,11 @@ class RecommendationEngine:
                     "mt5_unavailable",
                     run_timestamp,
                     market_price,
+                    self._mt5_connection_status(),
                 )
 
             market_status, market_reason = self.mt5.detect_market_status(symbol, timeframe)
+            market_status = self._normalize_market_status(market_status)
             if market_status == "mt5_unavailable":
                 return self._no_trade(
                     symbol,
@@ -69,6 +72,7 @@ class RecommendationEngine:
                     market_status,
                     run_timestamp,
                     market_price,
+                    self._mt5_connection_status(),
                 )
             if market_status == "unavailable":
                 return self._no_trade(
@@ -79,6 +83,7 @@ class RecommendationEngine:
                     market_status,
                     run_timestamp,
                     market_price,
+                    self._mt5_connection_status(),
                 )
             if market_status == "closed":
                 return self._no_trade(
@@ -89,6 +94,7 @@ class RecommendationEngine:
                     market_status,
                     run_timestamp,
                     market_price,
+                    self._mt5_connection_status(),
                 )
 
             candles = self.mt5.get_ohlcv(
@@ -98,12 +104,30 @@ class RecommendationEngine:
             )
             if candles.empty:
                 reason = self.mt5.status_message or f"No market data for {symbol}/{timeframe}"
-                return self._no_trade(symbol, timeframe, reason, "blocked", market_status, run_timestamp, market_price)
+                return self._no_trade(
+                    symbol,
+                    timeframe,
+                    reason,
+                    "blocked",
+                    market_status,
+                    run_timestamp,
+                    market_price,
+                    self._mt5_connection_status(),
+                )
             market_price = float(candles.iloc[-1]["close"])
 
             blocked, news_status, reason, confidence_multiplier = self._news_gate(symbol)
             if blocked:
-                return self._no_trade(symbol, timeframe, reason, news_status, market_status, run_timestamp, market_price)
+                return self._no_trade(
+                    symbol,
+                    timeframe,
+                    reason,
+                    news_status,
+                    market_status,
+                    run_timestamp,
+                    market_price,
+                    self._mt5_connection_status(),
+                )
 
             strategy_outputs = self._run_strategies(symbol, candles)
             if not strategy_outputs:
@@ -115,6 +139,7 @@ class RecommendationEngine:
                     market_status,
                     run_timestamp,
                     market_price,
+                    self._mt5_connection_status(),
                 )
 
             recommendation = self._aggregate(
@@ -127,6 +152,7 @@ class RecommendationEngine:
                 reason,
                 market_status,
                 run_timestamp,
+                self._mt5_connection_status(),
             )
             LOGGER.info("Final recommendation generated\n%s", self.format_for_terminal(recommendation))
             return recommendation
@@ -159,7 +185,18 @@ class RecommendationEngine:
             opt = optimization_results.get(strategy.name)
             if opt is not None:
                 params = opt.best_params
-                score = StrategyScore(strategy.name, opt.best_score, 0.0, 0, 0.0, 0.0, 0.0, 0.0, 0.0)
+                score = StrategyScore(
+                    strategy_name=strategy.name,
+                    score=float(opt.best_score),
+                    net_pnl=0.0,
+                    trades=0,
+                    max_drawdown=0.0,
+                    win_rate=0.0,
+                    loss_rate=0.0,
+                    average_pnl=0.0,
+                    profit_factor=0.0,
+                    expectancy=float(getattr(opt, "best_expectancy", 0.0)),
+                )
 
             signal = strategy.generate_signal(candles, params)
             if signal.action == SignalAction.NO_TRADE:
@@ -246,6 +283,7 @@ class RecommendationEngine:
         news_reason: str = "No relevant blocking events",
         market_status: str = "open",
         timestamp: datetime | None = None,
+        mt5_connection_status: str | None = None,
     ) -> FinalRecommendation:
         if market_status != "open":
             return self._no_trade(
@@ -256,6 +294,7 @@ class RecommendationEngine:
                 market_status,
                 timestamp or datetime.utcnow(),
                 market_price,
+                self._mt5_connection_status(),
             )
         if news_status == "blocked":
             return self._no_trade(
@@ -266,6 +305,7 @@ class RecommendationEngine:
                 market_status,
                 timestamp or datetime.utcnow(),
                 market_price,
+                self._mt5_connection_status(),
             )
 
         buys = [item for item in strategy_outputs if item[0].action == SignalAction.BUY]
@@ -280,6 +320,7 @@ class RecommendationEngine:
                 market_status,
                 timestamp or datetime.utcnow(),
                 market_price,
+                self._mt5_connection_status(),
             )
 
         selected = buys if buys else sells
@@ -338,6 +379,7 @@ class RecommendationEngine:
                 market_status,
                 timestamp or datetime.utcnow(),
                 market_price,
+                self._mt5_connection_status(),
             )
 
         avg_entry = float(sum(entry_vals) / len(entry_vals))
@@ -360,6 +402,7 @@ class RecommendationEngine:
             selected_strategy=names[0] if len(names) == 1 else "+".join(names),
             market_status=market_status,
             news_status=news_status,
+            mt5_connection_status=mt5_connection_status or self._mt5_connection_status(),
             reasons=reasons,
             timestamp=timestamp or datetime.utcnow(),
         )
@@ -373,6 +416,7 @@ class RecommendationEngine:
         market_status: str,
         timestamp: datetime,
         market_price: float,
+        mt5_connection_status: str = "unknown",
     ) -> FinalRecommendation:
         return FinalRecommendation(
             symbol=symbol,
@@ -387,9 +431,19 @@ class RecommendationEngine:
             selected_strategy="none",
             market_status=market_status,
             news_status=news_status,
+            mt5_connection_status=mt5_connection_status,
             reasons=[reason],
             timestamp=timestamp,
         )
+
+    def _mt5_connection_status(self) -> str:
+        return "connected" if getattr(self.mt5, "connected", False) else "unavailable"
+
+    @staticmethod
+    def _normalize_market_status(status: str) -> str:
+        if status in VALID_MARKET_STATUSES:
+            return status
+        return "unavailable"
 
     @staticmethod
     def format_for_terminal(recommendation: FinalRecommendation) -> str:

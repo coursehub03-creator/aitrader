@@ -99,6 +99,8 @@ def action_theme(recommendation: FinalRecommendation) -> tuple[str, str]:
 
 
 def normalize_recommendation(recommendation: FinalRecommendation) -> FinalRecommendation:
+    if recommendation.market_status == "mt5_unavailable":
+        recommendation.action = SignalAction.NO_TRADE
     if recommendation.market_status == "closed":
         recommendation.action = SignalAction.NO_TRADE
         if "Market Closed: Trading recommendation suppressed by policy." not in recommendation.reasons:
@@ -118,11 +120,12 @@ def render_header() -> None:
 
 
 def render_status_cards(connection_status: str, recommendation: FinalRecommendation | None) -> None:
+    mt5_status = recommendation.mt5_connection_status if recommendation else connection_status
     market_status = recommendation.market_status if recommendation else "n/a"
     news_status = recommendation.news_status if recommendation else "n/a"
     refresh_text = st.session_state.last_refresh_label
     cards = st.columns(4)
-    cards[0].metric("MT5 Connection", connection_status)
+    cards[0].metric("MT5 Connection", mt5_status)
     cards[1].metric("Market Status", market_status)
     cards[2].metric("News Status", news_status)
     cards[3].metric("Last Refresh", refresh_text)
@@ -170,6 +173,7 @@ def render_recommendation_detail_table(recommendation: FinalRecommendation) -> N
         ("timeframe", recommendation.timeframe),
         ("timestamp", recommendation.timestamp.replace(tzinfo=timezone.utc).isoformat(timespec="seconds")),
         ("market_status", recommendation.market_status),
+        ("mt5_connection_status", recommendation.mt5_connection_status),
         ("news_status", recommendation.news_status),
         ("selected_strategy", recommendation.selected_strategy),
         ("action", action),
@@ -327,7 +331,7 @@ def main() -> None:
     symbol, timeframe, do_run, interval, auto_refresh = sidebar_controls(service)
 
     status, reason = service.connection_status(symbol, timeframe)
-    connection_text = f"{status} ({reason})" if reason else status
+    connection_text = "connected" if status != "mt5_unavailable" else "unavailable"
     render_header()
 
     should_run_cycle = bool(do_run or auto_refresh)
@@ -356,6 +360,10 @@ def main() -> None:
     rec: FinalRecommendation = st.session_state.last_recommendation
     render_status_cards(connection_text, rec)
     st.markdown("---")
+    if (rec and rec.market_status == "mt5_unavailable") or (rec is None and status == "mt5_unavailable"):
+        st.error(
+            "⚠️ MT5 IS UNAVAILABLE — recommendation generation is forced to NO_TRADE until MT5 reconnects."
+        )
 
     # Main row: recommendation + diagnostics (dense cockpit style).
     main_left, main_right = st.columns([1.6, 1], gap="medium")

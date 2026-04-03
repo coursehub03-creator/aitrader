@@ -80,7 +80,11 @@ class StrategyScore:
     loss_rate: float
     average_pnl: float
     profit_factor: float
-    expectancy: float
+    expectancy: float = 0.0
+
+    def __post_init__(self) -> None:
+        if self.expectancy is None:
+            self.expectancy = 0.0
 
 
 @dataclass(slots=True)
@@ -97,6 +101,7 @@ class FinalRecommendation:
     selected_strategy: str
     market_status: str
     news_status: str
+    mt5_connection_status: str = "unknown"
     reasons: list[str] = field(default_factory=list)
     timestamp: datetime = field(default_factory=datetime.utcnow)
 

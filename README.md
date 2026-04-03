@@ -79,6 +79,12 @@ streamlit run ui/app.py
 - `unavailable`: Symbol is missing/not tradable in MT5.
 - `mt5_unavailable`: MT5 package or terminal is not reachable.
 
+`mt5_connection_status`:
+- `connected`: MT5 initialize succeeded for the current cycle.
+- `unavailable`: MT5 initialize failed for the current cycle.
+
+The dashboard top cards and the recommendation output now use the same backend recommendation payload as the single source of truth (including `market_status` and `mt5_connection_status`).
+
 `news_status`:
 - `clear`: No blocking event in effect.
 - `blocked`: High-impact event blocks trading; action is forced to `NO_TRADE`.
@@ -145,3 +151,5 @@ streamlit run ui/app.py
   - `unavailable` → symbol is missing or not tradable in MT5, returns `NO_TRADE`.
   - `mt5_unavailable` → MT5 package/terminal is unavailable, returns `NO_TRADE`.
 - Terminal output now prints **Market Status** near the top so the operator sees session availability before reviewing strategy details.
+- MT5 initialization includes safe retry behavior (up to 3 attempts with short delay by default).
+- MT5 terminal path and login options can be configured in `config/settings.yaml` under `mt5.*` (`terminal_path`, `login`, `password`, `server`, retry settings).
