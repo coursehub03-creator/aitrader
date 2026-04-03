@@ -211,3 +211,33 @@ def test_fetch_historical_data_invalid_lookback_payload(monkeypatch) -> None:
     payload = service.fetch_historical_data("eurusd", "m5", 10)
     assert payload["success"] is False
     assert "Unsupported lookback window" in payload["status_message"]
+
+
+def test_symbol_profile_summary_includes_profile_thresholds() -> None:
+    service = DashboardService.__new__(DashboardService)
+    service.settings = type(
+        "S",
+        (),
+        {
+            "get": lambda self, key, default=None: {
+                "recommendation.symbol_profiles": {
+                    "DEFAULT": {"spread_threshold": 25, "preferred_sessions": ["london"]},
+                    "EURUSD": {"name": "eurusd_major", "min_confidence": 0.62, "spread_threshold": 18},
+                }
+            }.get(key, default)
+        },
+    )()
+    summary = service.symbol_profile_summary("EURUSD")
+    assert summary["name"] == "eurusd_major"
+    assert summary["spread_threshold"] == 18.0
+    assert summary["min_confidence"] == 0.62
+
+
+def test_optimizer_leaderboard_by_symbol_reads_report(tmp_path) -> None:
+    service = DashboardService.__new__(DashboardService)
+    service.settings = type("S", (), {"get": lambda self, key, default=None: str(tmp_path) if key == "learning.optimization_report_dir" else default})()
+    (tmp_path / "symbol_optimizer_leaderboard.json").write_text('[{"symbol":"EURUSD","strategy_name":"trend_rsi","best_score":2.1,"symbol_rank":1}]', encoding="utf-8")
+
+    board = service.optimizer_leaderboard_by_symbol()
+    assert not board.empty
+    assert board.loc[0, "symbol"] == "EURUSD"

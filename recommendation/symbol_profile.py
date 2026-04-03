@@ -24,6 +24,24 @@ class SymbolProfile:
     news_sensitivity: dict[str, Any] = field(default_factory=dict)
     optimizer_ranges: dict[str, dict[str, list[Any]]] = field(default_factory=dict)
 
+    def to_display_dict(self) -> dict[str, Any]:
+        return {
+            "name": self.name,
+            "preferred_timeframes": list(self.preferred_timeframes),
+            "preferred_sessions": list(self.preferred_sessions),
+            "session_outside_policy": self.session_outside_policy,
+            "session_confidence_multiplier": float(self.session_confidence_multiplier),
+            "spread_threshold": float(self.spread_threshold),
+            "spread_elevated_ratio": float(self.spread_elevated_ratio),
+            "atr_low_threshold": float(self.atr_low_threshold),
+            "atr_high_threshold": float(self.atr_high_threshold),
+            "atr_extreme_threshold": float(self.atr_extreme_threshold),
+            "min_confidence": float(self.min_confidence),
+            "min_risk_reward": float(self.min_risk_reward),
+            "news_sensitivity": dict(self.news_sensitivity),
+            "optimizer_ranges": dict(self.optimizer_ranges),
+        }
+
 
 def session_state(now_utc: datetime) -> str:
     hour = now_utc.hour
@@ -65,4 +83,3 @@ def profile_for_symbol(symbol: str, settings: Any) -> SymbolProfile:
         news_sensitivity=dict(merged.get("news_sensitivity", {})),
         optimizer_ranges=dict(merged.get("optimizer_ranges", {})),
     )
-

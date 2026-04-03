@@ -44,6 +44,7 @@ def test_per_symbol_profile_loading() -> None:
     assert profile.name == 'xauusd_macro'
     assert profile.spread_threshold == 35
     assert profile.preferred_sessions == ['new_york']
+    assert profile.to_display_dict()['name'] == 'xauusd_macro'
 
 
 def test_session_filter_blocks_when_policy_block() -> None:
@@ -92,3 +93,49 @@ def test_symbol_specific_news_mapping() -> None:
     engine = RecommendationEngine(mt5_client=object(), news_provider=object(), news_filter=object(), strategies=[], settings=settings, optimizer=_FakeOptimizer())
     mapped = profile.news_sensitivity.get('currencies', [])
     assert mapped == ['USD', 'MACRO']
+
+
+def test_symbol_specific_news_block_windows_override_defaults() -> None:
+    now = datetime(2026, 1, 1, 12, 0, 0)
+    event = type('Evt', (), {'title': 'CPI', 'currency': 'CAD', 'impact': 'high', 'event_time': now.replace(minute=20)})()
+    settings = _Settings({'news': {'symbols_map': {'USDCAD': ['USD', 'CAD']}}})
+    profile = type(
+        'P',
+        (),
+        {
+            'news_sensitivity': {
+                'currencies': ['USD', 'CAD'],
+                'block_before_min': 30,
+                'reduce_before_min': 60,
+                'currency_windows': {'CAD': {'block_before_min': 50}},
+            }
+        },
+    )()
+    engine = RecommendationEngine(
+        mt5_client=type('M', (), {'now': lambda self: now})(),
+        news_provider=type('N', (), {'fetch_events': lambda self, _s, _e: [event]})(),
+        news_filter=type('F', (), {'evaluate': lambda self, _n, _ev, _sym: type('D', (), {'decision': 'allow', 'reason': 'clear', 'confidence_multiplier': 1.0})()})(),
+        strategies=[],
+        settings=settings,
+        optimizer=_FakeOptimizer(),
+    )
+    blocked, status, reason, multiplier, next_event = engine._news_gate('USDCAD', profile)
+    assert blocked is True
+    assert status == 'blocked'
+    assert 'High-impact news' in reason
+    assert multiplier == 0.0
+    assert next_event is not None
+
+
+def test_optimizer_writes_symbol_leaderboard_file(tmp_path) -> None:
+    rows = 280
+    prices = [1.0 + i * 0.0003 for i in range(rows)]
+    candles = pd.DataFrame({'open': prices, 'high': [p + 0.0004 for p in prices], 'low': [p - 0.0004 for p in prices], 'close': prices, 'volume': [100] * rows})
+
+    optimizer = ParameterOptimizer(lookahead_bars=5, min_history_bars=100, step=20, report_dir=tmp_path)
+    strategy = TrendRSIStrategy()
+    optimizer.optimize(strategy, candles, {'ema_fast': [8], 'ema_slow': [30], 'rsi_buy_threshold': [50], 'rsi_sell_threshold': [45]}, symbol='EURUSD', fixed_params={'rsi_period': 14})
+
+    leaderboard = json.loads((tmp_path / 'symbol_optimizer_leaderboard.json').read_text(encoding='utf-8'))
+    assert leaderboard[0]['symbol'] == 'EURUSD'
+    assert leaderboard[0]['strategy_name'] == 'trend_rsi'

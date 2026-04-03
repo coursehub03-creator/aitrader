@@ -157,6 +157,37 @@ class ParameterOptimizer:
         payload.setdefault(symbol, {})
         payload[symbol][strategy_name] = {"best_params": best_params, "best_score": float(best_score)}
         registry_path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+        self._write_symbol_leaderboard(payload)
+
+    def _write_symbol_leaderboard(self, registry: dict[str, Any]) -> None:
+        rows: list[dict[str, Any]] = []
+        for symbol, by_strategy in registry.items():
+            if not isinstance(by_strategy, dict):
+                continue
+            for strategy_name, details in by_strategy.items():
+                if not isinstance(details, dict):
+                    continue
+                rows.append(
+                    {
+                        "symbol": str(symbol).upper(),
+                        "strategy_name": str(strategy_name),
+                        "best_score": float(details.get("best_score", 0.0)),
+                        "best_params": details.get("best_params", {}),
+                    }
+                )
+        leaderboard = sorted(rows, key=lambda item: (item["symbol"], -item["best_score"], item["strategy_name"]))
+        for idx, row in enumerate(leaderboard):
+            previous_symbol = leaderboard[idx - 1]["symbol"] if idx > 0 else None
+            if row["symbol"] != previous_symbol:
+                rank = 1
+            else:
+                rank = int(leaderboard[idx - 1]["symbol_rank"]) + 1
+            row["symbol_rank"] = rank
+
+        (self.report_dir / "symbol_optimizer_leaderboard.json").write_text(
+            json.dumps(leaderboard, indent=2),
+            encoding="utf-8",
+        )
 
     def _evaluate_split(
         self,

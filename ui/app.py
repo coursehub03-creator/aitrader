@@ -292,12 +292,21 @@ def render_trading_cockpit(service: DashboardService, state, recommendation: Fin
         with intel_col:
             st.markdown("### Intelligence Panel")
             snap = snapshots.get(state.symbol, {"last_price": 0.0, "daily_change_pct": 0.0, "market_status": "unknown"})
+            profile_summary = service.symbol_profile_summary(state.symbol)
             st.metric("Current Symbol", state.symbol)
             st.metric("Last Price", f"{float(snap.get('last_price', 0.0)):.5f}" if snap.get("last_price") else "n/a")
             st.metric("Daily Change", f"{float(snap.get('daily_change_pct', 0.0)):+.2f}%")
             st.metric("Market Snapshot", str(snap.get("market_status", "unknown")))
             st.metric("Alert Status", st.session_state.latest_alert_status)
+            st.metric("Profile", str(profile_summary.get("name", "default")))
             st.caption(st.session_state.latest_alert_reason or "No alert reason available.")
+            st.caption(
+                "Profile gates — "
+                f"Session: {','.join(profile_summary.get('preferred_sessions', [])) or 'any'} | "
+                f"Spread≤{float(profile_summary.get('spread_threshold', 0.0)):.2f} | "
+                f"MinConf {float(profile_summary.get('min_confidence', 0.0)):.2f} | "
+                f"MinRR {float(profile_summary.get('min_risk_reward', 0.0)):.2f}"
+            )
             if recommendation and recommendation.market_status == "mt5_unavailable":
                 st.error("⚠️ MT5 unavailable: recommendations forced to NO_TRADE.")
             elif recommendation and recommendation.market_status == "closed":
@@ -353,6 +362,14 @@ def render_market_visuals(service: DashboardService, state, recommendation: Fina
 def render_self_learning_center(service: DashboardService) -> None:
     payload = service.learning_center_payload()
     render_learning_health(payload)
+    with st.expander("Optimizer Leaderboard by Symbol", expanded=False):
+        optimizer_board = service.optimizer_leaderboard_by_symbol()
+        st.dataframe(
+            optimizer_board if not optimizer_board.empty else pd.DataFrame([{"info": "No optimizer leaderboard data yet"}]),
+            use_container_width=True,
+            hide_index=True,
+            height=220,
+        )
     with st.expander("Best Configuration per Symbol", expanded=False):
         best_config = payload.get("best_config", pd.DataFrame())
         st.dataframe(
