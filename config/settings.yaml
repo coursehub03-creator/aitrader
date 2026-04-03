@@ -60,3 +60,14 @@ learning:
       breakout_lookback: [15, 20, 30]
       atr_sl_multiplier: [1.0, 1.5, 2.0]
       atr_tp_multiplier: [2.0, 2.5, 3.0]
+
+recommendation:
+  min_confidence: 0.6
+  min_risk_reward: 1.5
+  volatility:
+    atr_period: 14
+    low_atr_pct: 0.0005
+    high_atr_pct: 0.005
+    extreme_high_atr_pct: 0.0075
+    low_vol_confidence_multiplier: 0.7
+    high_vol_confidence_multiplier: 0.85

@@ -53,6 +53,10 @@ class DashboardService:
             "take_profit": recommendation.take_profit,
             "confidence": recommendation.confidence,
             "risk_reward": recommendation.risk_reward,
+            "signal_strength": recommendation.signal_strength,
+            "rejection_reason": recommendation.rejection_reason or "",
+            "volatility_state": recommendation.volatility_state,
+            "next_news_event": json.dumps(recommendation.next_news_event or {}),
             "reasons": " | ".join(recommendation.reasons),
         }
 
@@ -85,6 +89,10 @@ class DashboardService:
                 market_status="mt5_unavailable",
                 news_status="unknown",
                 mt5_connection_status="unavailable",
+                signal_strength="weak",
+                rejection_reason=f"Runtime error while generating recommendation: {exc}",
+                volatility_state="normal",
+                next_news_event=None,
                 reasons=[f"Runtime error while generating recommendation: {exc}"],
                 timestamp=datetime.utcnow(),
             )

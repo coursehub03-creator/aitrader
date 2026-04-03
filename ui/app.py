@@ -146,6 +146,14 @@ def render_recommendation_summary(recommendation: FinalRecommendation) -> None:
         st.error("📰 High-impact news blocked trading for this cycle.")
     elif recommendation.news_status == "reduced_confidence":
         st.warning("📰 News impact reduced confidence — review risk carefully.")
+    if recommendation.confidence < 0.6:
+        st.warning("⚠️ Low confidence: below minimum quality threshold (0.60).")
+    if recommendation.volatility_state in {"low", "high"}:
+        st.warning(f"⚠️ Volatility risk detected: {recommendation.volatility_state.upper()}.")
+    if recommendation.next_news_event:
+        evt = recommendation.next_news_event
+        mins = evt.get("minutes_to_event", "n/a")
+        st.info(f"🗞️ Next news event in {mins} min: {evt.get('title', 'n/a')} ({evt.get('currency', 'n/a')}, {evt.get('impact', 'n/a')})")
 
     st.markdown(
         f"""
@@ -163,6 +171,9 @@ def render_recommendation_summary(recommendation: FinalRecommendation) -> None:
     c3.metric("Take Profit", f"{recommendation.take_profit:.5f}")
     c4.metric("Confidence", f"{recommendation.confidence:.2%}")
     st.metric("Risk / Reward", f"{recommendation.risk_reward:.2f}")
+    st.metric("Signal Strength", recommendation.signal_strength.upper())
+    if recommendation.action == SignalAction.NO_TRADE and recommendation.rejection_reason:
+        st.error(f"Rejected trade: {recommendation.rejection_reason}")
 
 
 def render_recommendation_detail_table(recommendation: FinalRecommendation) -> None:
@@ -182,6 +193,10 @@ def render_recommendation_detail_table(recommendation: FinalRecommendation) -> N
         ("take_profit", f"{recommendation.take_profit:.5f}"),
         ("confidence", f"{recommendation.confidence:.2%}"),
         ("risk_reward", f"{recommendation.risk_reward:.2f}"),
+        ("signal_strength", recommendation.signal_strength),
+        ("rejection_reason", recommendation.rejection_reason or ""),
+        ("volatility_state", recommendation.volatility_state),
+        ("next_news_event", recommendation.next_news_event or {}),
         ("reasons", " | ".join(recommendation.reasons)),
     ]
     st.dataframe(pd.DataFrame(rows, columns=["field", "value"]), use_container_width=True, hide_index=True)
@@ -223,10 +238,13 @@ def render_recent_recommendations(service: DashboardService) -> None:
         "timestamp",
         "symbol",
         "action",
+        "signal_strength",
         "confidence",
         "selected_strategy",
         "market_status",
         "news_status",
+        "volatility_state",
+        "rejection_reason",
     ]
     st.dataframe(recent[keep_cols], use_container_width=True, hide_index=True)
 

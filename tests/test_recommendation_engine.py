@@ -1,5 +1,5 @@
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timedelta
 
 import pandas as pd
 
@@ -123,12 +123,13 @@ def test_news_gate_returns_unknown_when_provider_fails() -> None:
             raise RuntimeError("provider down")
 
     engine.news_provider = _BoomProvider()
-    blocked, news_status, reason, confidence_multiplier = engine._news_gate("EURUSD")
+    blocked, news_status, reason, confidence_multiplier, next_event = engine._news_gate("EURUSD")
 
     assert blocked is False
     assert news_status == "unknown"
     assert "unavailable" in reason
     assert confidence_multiplier == 1.0
+    assert next_event is None
 
 
 class _FakeMT5:
@@ -280,6 +281,10 @@ def test_final_recommendation_has_operator_output_fields() -> None:
         "market_status",
         "news_status",
         "mt5_connection_status",
+        "signal_strength",
+        "rejection_reason",
+        "volatility_state",
+        "next_news_event",
         "reasons",
         "timestamp",
     }
@@ -360,3 +365,54 @@ def test_generate_does_not_crash_when_optimizer_has_no_trade_history() -> None:
 
     assert rec.action == SignalAction.BUY
     assert rec.market_status == "open"
+
+
+def test_aggregate_rejects_low_confidence() -> None:
+    engine = _engine()
+    signal = StrategySignal("trend_rsi", SignalAction.BUY, 1.25, 1.24, 1.27, 0.5, ["weak trend"])
+
+    rec = engine._aggregate("EURUSD", "M5", [(signal, None)], market_price=1.251)
+
+    assert rec.action == SignalAction.NO_TRADE
+    assert "confidence" in (rec.rejection_reason or "").lower()
+
+
+def test_aggregate_rejects_low_risk_reward() -> None:
+    engine = _engine()
+    signal = StrategySignal("trend_rsi", SignalAction.BUY, 1.25, 1.24, 1.255, 0.75, ["small target"])
+
+    rec = engine._aggregate("EURUSD", "M5", [(signal, None)], market_price=1.251)
+
+    assert rec.action == SignalAction.NO_TRADE
+    assert "risk/reward" in (rec.rejection_reason or "").lower()
+
+
+def test_news_gate_blocks_when_high_impact_within_30_minutes() -> None:
+    engine = _engine()
+    now = datetime.utcnow()
+    engine.mt5 = type("MT5", (), {"now": lambda self: now})()
+    engine.settings = {"news.symbols_map": {"EURUSD": ["EUR", "USD"]}}
+    engine.news_filter = NewsFilter(30, 15)
+
+    class _Provider:
+        def fetch_events(self, from_time: datetime, to_time: datetime) -> list[NewsEvent]:
+            return [
+                NewsEvent(
+                    event_id="1",
+                    title="NFP",
+                    currency="USD",
+                    impact="high",
+                    event_time=now + timedelta(minutes=20),
+                    actual=None,
+                    forecast=None,
+                    previous=None,
+                    source="test",
+                )
+            ]
+
+    engine.news_provider = _Provider()
+    blocked, status, _, _, next_event = engine._news_gate("EURUSD")
+
+    assert blocked is True
+    assert status == "blocked"
+    assert next_event is not None
