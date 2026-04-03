@@ -45,3 +45,25 @@ class TableEnvelope(BaseModel):
     """Tabular payload for paper trades, alerts, and learning data."""
 
     rows: list[dict[str, Any]] = Field(default_factory=list)
+
+
+class HistoricalFetchRequest(BaseModel):
+    symbol: str = "EURUSD"
+    timeframe: str = "M5"
+    lookback_days: int = Field(default=90, description="Supported: 30, 90, 180, 365")
+
+
+class HistoricalFetchResponse(BaseModel):
+    success: bool
+    symbol: str
+    timeframe: str
+    lookback_days: int
+    candles_fetched: int
+    date_start: str = ""
+    date_end: str = ""
+    storage_path: str = ""
+    status_message: str
+
+
+class HistoryInventoryEnvelope(BaseModel):
+    rows: list[dict[str, Any]] = Field(default_factory=list)

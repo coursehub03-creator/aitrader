@@ -1,4 +1,4 @@
-import { apiGet } from "@/lib/api-client";
+import { apiGet } from "@/features/shared/api-client";
 
 export type WatchlistPayload = { symbols: string[] };
 

@@ -39,6 +39,32 @@ class FakeService:
     def learning_center_payload(self):
         return {"health": {"status": "good"}, "events": pd.DataFrame([{"event": "optimizer_run"}])}
 
+    def fetch_historical_data(self, symbol: str, timeframe: str, lookback_days: int):
+        return {
+            "success": True,
+            "symbol": symbol.upper(),
+            "timeframe": timeframe.upper(),
+            "lookback_days": lookback_days,
+            "candles_fetched": 42,
+            "date_start": "2026-01-01T00:00:00+00:00",
+            "date_end": "2026-01-02T00:00:00+00:00",
+            "storage_path": "data/market_history/EURUSD_M5.csv",
+            "status_message": "Fetched 42 candles successfully.",
+        }
+
+    def historical_data_summary(self):
+        return pd.DataFrame(
+            [
+                {
+                    "symbol": "EURUSD",
+                    "timeframe": "M5",
+                    "candles": 42,
+                    "data_start": "2026-01-01T00:00:00+00:00",
+                    "data_end": "2026-01-02T00:00:00+00:00",
+                }
+            ]
+        )
+
 
 def _client(tmp_path) -> TestClient:
     watchlist_router.WATCHLIST_PATH = tmp_path / "watchlist.json"
@@ -94,3 +120,24 @@ def test_watchlist_endpoint_handles_malformed_json(tmp_path) -> None:
     response = client.get("/watchlist")
     assert response.status_code == 200
     assert response.json()["symbols"] == ["EURUSD", "GBPUSD", "USDJPY", "XAUUSD"]
+
+
+def test_learning_historical_fetch_endpoint(tmp_path) -> None:
+    client = _client(tmp_path)
+    response = client.post(
+        "/learning/history/fetch",
+        json={"symbol": "EURUSD", "timeframe": "M5", "lookback_days": 90},
+    )
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["success"] is True
+    assert payload["candles_fetched"] == 42
+
+
+def test_learning_historical_inventory_endpoint(tmp_path) -> None:
+    client = _client(tmp_path)
+    response = client.get("/learning/history/inventory")
+    assert response.status_code == 200
+    payload = response.json()
+    assert len(payload["rows"]) == 1
+    assert payload["rows"][0]["symbol"] == "EURUSD"

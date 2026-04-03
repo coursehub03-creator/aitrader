@@ -13,6 +13,7 @@ from learning.persistence import LearningPersistence
 
 
 RangeUnit = Literal["days", "weeks", "months"]
+SUPPORTED_LOOKBACK_DAYS = (30, 90, 180, 365)
 
 
 class HistoricalDataPipeline:
@@ -53,6 +54,14 @@ class HistoricalDataPipeline:
             combined = candles.copy()
         output_path = self.persistence.safe_write_market_history(base_path, combined, prefer_parquet=False)
         return combined, output_path
+
+    def fetch_and_store_days(self, symbol: str, timeframe: str, lookback_days: int) -> tuple[pd.DataFrame, Path]:
+        if int(lookback_days) not in SUPPORTED_LOOKBACK_DAYS:
+            raise ValueError(
+                f"Unsupported lookback window '{lookback_days}'. "
+                f"Supported windows: {', '.join(str(item) for item in SUPPORTED_LOOKBACK_DAYS)} days."
+            )
+        return self.fetch_and_store(symbol=symbol, timeframe=timeframe, lookback_value=int(lookback_days), lookback_unit="days")
 
     def load_history(self, symbol: str, timeframe: str) -> pd.DataFrame:
         base_path = self.persistence.layout.market_history_dir / f"{symbol.upper()}_{timeframe.upper()}"

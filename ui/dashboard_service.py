@@ -93,17 +93,49 @@ class DashboardService:
         self,
         symbol: str,
         timeframe: str,
-        lookback_value: int,
-        lookback_unit: str,
-    ) -> tuple[pd.DataFrame, str]:
+        lookback_days: int,
+    ) -> dict[str, Any]:
         mt5 = self._build_mt5_client()
         pipeline = HistoricalDataPipeline(mt5, persistence=self.persistence)
-        mt5.connect()
         try:
-            frame, path = pipeline.fetch_and_store(symbol, timeframe, lookback_value, lookback_unit)  # type: ignore[arg-type]
+            mt5.connect()
+            frame, path = pipeline.fetch_and_store_days(symbol=symbol, timeframe=timeframe, lookback_days=int(lookback_days))
             if frame.empty:
-                return frame, mt5.status_message or "No historical data available."
-            return frame, f"Fetched historical candles successfully. Saved {len(frame)} candles to {path}."
+                return {
+                    "success": False,
+                    "symbol": symbol.upper(),
+                    "timeframe": timeframe.upper(),
+                    "lookback_days": int(lookback_days),
+                    "candles_fetched": 0,
+                    "date_start": "",
+                    "date_end": "",
+                    "storage_path": "",
+                    "status_message": mt5.status_message or "No historical data available.",
+                }
+            times = pd.to_datetime(frame["time"], errors="coerce").dropna()
+            return {
+                "success": True,
+                "symbol": symbol.upper(),
+                "timeframe": timeframe.upper(),
+                "lookback_days": int(lookback_days),
+                "candles_fetched": int(len(frame)),
+                "date_start": times.min().isoformat() if not times.empty else "",
+                "date_end": times.max().isoformat() if not times.empty else "",
+                "storage_path": str(path),
+                "status_message": f"Fetched {len(frame)} candles successfully.",
+            }
+        except ValueError as exc:
+            return {
+                "success": False,
+                "symbol": symbol.upper(),
+                "timeframe": timeframe.upper(),
+                "lookback_days": int(lookback_days),
+                "candles_fetched": 0,
+                "date_start": "",
+                "date_end": "",
+                "storage_path": "",
+                "status_message": str(exc),
+            }
         finally:
             mt5.shutdown()
 

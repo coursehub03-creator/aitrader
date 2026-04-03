@@ -34,3 +34,54 @@ body {
 .watchlist { grid-column: 1 / 2; grid-row: 1 / 2; }
 .recommendations { grid-column: 3 / 4; grid-row: 1 / 2; }
 .bottom { grid-column: 1 / 4; grid-row: 2 / 3; display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+
+.learning-center .control-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(120px, 1fr));
+  gap: 10px;
+  margin-bottom: 10px;
+}
+
+.learning-center label {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 0.85rem;
+}
+
+.learning-center select,
+.learning-center button {
+  background: #0b1220;
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 6px 8px;
+}
+
+.learning-center .fetch-status {
+  margin-top: 12px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 8px;
+}
+
+.learning-center .fetch-status.ok {
+  border-color: #1f9d55;
+}
+
+.learning-center .fetch-status.error {
+  border-color: #c53030;
+}
+
+.learning-center .inventory-table {
+  width: 100%;
+  border-collapse: collapse;
+  margin-top: 8px;
+}
+
+.learning-center .inventory-table th,
+.learning-center .inventory-table td {
+  border: 1px solid var(--border);
+  padding: 6px;
+  font-size: 0.82rem;
+}
