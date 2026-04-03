@@ -229,7 +229,7 @@ monitoring:
   telegram:
     enabled: true
     bot_token: "8729539516:AAHbpZMCGekzDiGV_BvIVGj_VKxKgXikkeA"
-    chat_id: ""
+    chat_id: "571073553"
     timeout_seconds: 10
     bot_username: "a_i_mt5_bot"
     bot_link: "https://t.me/a_i_mt5_bot"
