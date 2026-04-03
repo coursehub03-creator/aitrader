@@ -46,7 +46,12 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def _recommendation_to_dict(recommendation: Any) -> dict[str, Any]:
-    action = recommendation.action.value if hasattr(recommendation.action, "value") else recommendation.action
+    action = (
+        recommendation.action.value
+        if hasattr(recommendation.action, "value")
+        else recommendation.action
+    )
+
     return {
         "symbol": recommendation.symbol,
         "timeframe": recommendation.timeframe,
@@ -71,13 +76,16 @@ def _persist_cycle_result(
     error: str | None = None,
 ) -> None:
     MONITOR_LOG_PATH.parent.mkdir(parents=True, exist_ok=True)
+
     payload: dict[str, Any] = {
         "cycle": cycle,
         "interval_seconds": interval_seconds,
         "error": error,
     }
+
     if recommendation is not None:
         payload["recommendation"] = _recommendation_to_dict(recommendation)
+
     with MONITOR_LOG_PATH.open("a", encoding="utf-8") as handle:
         handle.write(json.dumps(payload) + "\n")
 
@@ -89,7 +97,9 @@ def build_engine(settings: Any) -> RecommendationEngine:
         news_filter=NewsFilter(
             before_minutes=int(settings.get("news.high_impact_cooldown_before_min", 30)),
             after_minutes=int(settings.get("news.high_impact_cooldown_after_min", 15)),
-            medium_impact_confidence_multiplier=float(settings.get("news.medium_impact_confidence_multiplier", 0.7)),
+            medium_impact_confidence_multiplier=float(
+                settings.get("news.medium_impact_confidence_multiplier", 0.7)
+            ),
         ),
         strategies=create_default_strategies(),
         settings=settings,
@@ -101,7 +111,9 @@ def build_engine(settings: Any) -> RecommendationEngine:
             random_search_trials=int(settings.get("learning.random_search_trials", 20)),
             min_validation_trades=int(settings.get("learning.min_validation_trades", 2)),
             min_forward_trades=int(settings.get("learning.min_forward_trades", 2)),
-            report_dir=str(settings.get("learning.optimization_report_dir", "logs/optimization")),
+            report_dir=str(
+                settings.get("learning.optimization_report_dir", "logs/optimization")
+            ),
         ),
     )
 
@@ -109,25 +121,47 @@ def build_engine(settings: Any) -> RecommendationEngine:
 def run(engine: RecommendationEngine, args: argparse.Namespace) -> None:
     interval = max(1, int(args.interval))
     cycle = 1
+
     while True:
         try:
-            recommendation = engine.generate(symbol=args.symbol.upper(), timeframe=args.timeframe.upper())
+            recommendation = engine.generate(
+                symbol=args.symbol.upper(),
+                timeframe=args.timeframe.upper(),
+            )
+
             print(f"\n--- Cycle {cycle} ---")
             print(f"Market status: {recommendation.market_status}")
+
             is_news_blocked = recommendation.news_status == "blocked"
             print(f"Trading blocked by news: {'yes' if is_news_blocked else 'no'}")
+
             if recommendation.action != "NO_TRADE":
                 print(engine.format_for_terminal(recommendation))
             else:
                 print("No actionable recommendation this cycle.")
+
             if recommendation.market_status == "mt5_unavailable":
                 print("MT5 appears disconnected; will retry next cycle.")
+
             print(json.dumps(_recommendation_to_dict(recommendation), indent=2))
-            _persist_cycle_result(recommendation, cycle=cycle, interval_seconds=interval)
-        except Exception as exc:  # defensive runtime loop for watch mode resilience
+
+            _persist_cycle_result(
+                recommendation,
+                cycle=cycle,
+                interval_seconds=interval,
+            )
+
+        except Exception as exc:
             LOGGER.exception("Cycle %s failed while generating recommendation", cycle)
             print(json.dumps({"error": f"Cycle {cycle} failed: {exc}"}, indent=2))
-            _persist_cycle_result(None, cycle=cycle, interval_seconds=interval, error=str(exc))
+
+            _persist_cycle_result(
+                None,
+                cycle=cycle,
+                interval_seconds=interval,
+                error=str(exc),
+            )
+
             if not args.watch:
                 break
 
@@ -144,6 +178,7 @@ def main() -> None:
     args = build_parser().parse_args()
     settings = load_settings(args.settings)
     configure_logging(settings.get("app.log_level", "INFO"))
+
     engine = build_engine(settings)
     run(engine, args)
 
