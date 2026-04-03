@@ -45,9 +45,11 @@ class ForexFactoryProvider(NewsProvider):
         for item in payload:
             if not isinstance(item, dict):
                 continue
+
             event_time = self._parse_time(item)
             if event_time is None or not (from_time <= event_time <= to_time):
                 continue
+
             events.append(
                 NewsEvent(
                     title=str(item.get("title", "Unknown")),
@@ -57,6 +59,7 @@ class ForexFactoryProvider(NewsProvider):
                     source="ForexFactory",
                 )
             )
+
         return events
 
     @staticmethod
@@ -66,12 +69,20 @@ class ForexFactoryProvider(NewsProvider):
 
         if isinstance(date_value, str) and "T" in date_value:
             try:
-                return datetime.fromisoformat(date_value.replace("Z", "+00:00")).astimezone(timezone.utc).replace(tzinfo=None)
+                return (
+                    datetime.fromisoformat(date_value.replace("Z", "+00:00"))
+                    .astimezone(timezone.utc)
+                    .replace(tzinfo=None)
+                )
             except ValueError:
                 return None
 
         if isinstance(date_value, str) and isinstance(time_value, str):
-            candidate = f"{date_value}T{time_value}:00" if len(time_value) == 5 else f"{date_value}T{time_value}"
+            candidate = (
+                f"{date_value}T{time_value}:00"
+                if len(time_value) == 5
+                else f"{date_value}T{time_value}"
+            )
             try:
                 return datetime.fromisoformat(candidate)
             except ValueError:

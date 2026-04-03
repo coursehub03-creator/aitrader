@@ -9,6 +9,7 @@ from logging.config import dictConfig
 def configure_logging(level: str = "INFO") -> None:
     """Configure logging for console output with structured key/value fields."""
     resolved_level = getattr(logging, level.upper(), logging.INFO)
+
     dictConfig(
         {
             "version": 1,
@@ -26,6 +27,9 @@ def configure_logging(level: str = "INFO") -> None:
                     "level": resolved_level,
                 }
             },
-            "root": {"handlers": ["console"], "level": resolved_level},
+            "root": {
+                "handlers": ["console"],
+                "level": resolved_level,
+            },
         }
     )

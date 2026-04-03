@@ -46,10 +46,15 @@ class RecommendationEngine:
         try:
             if not self.mt5.connected:
                 return self._no_trade(symbol, timeframe, self.mt5.status_message)
+
             if not self.mt5.ensure_symbol(symbol):
                 return self._no_trade(symbol, timeframe, self.mt5.status_message)
 
-            candles = self.mt5.get_ohlcv(symbol, timeframe, int(self.settings.get("app.data_bars", 500)))
+            candles = self.mt5.get_ohlcv(
+                symbol,
+                timeframe,
+                int(self.settings.get("app.data_bars", 500)),
+            )
             if candles.empty:
                 reason = self.mt5.status_message or f"No market data for {symbol}/{timeframe}"
                 return self._no_trade(symbol, timeframe, reason)
@@ -63,6 +68,7 @@ class RecommendationEngine:
                 return self._no_trade(symbol, timeframe, "No strategy produced an actionable signal")
 
             return self._aggregate(symbol, timeframe, strategy_outputs)
+
         finally:
             self.mt5.shutdown()
 
@@ -72,6 +78,7 @@ class RecommendationEngine:
         candles: pd.DataFrame,
     ) -> list[tuple[StrategySignal, StrategyScore | None]]:
         outputs: list[tuple[StrategySignal, StrategyScore | None]] = []
+
         grid_root = self.settings.get("learning.parameter_grid", {})
         optimization_enabled = bool(self.settings.get("learning.optimization_enabled", True))
 
@@ -84,6 +91,7 @@ class RecommendationEngine:
                 grid = dict(grid_root.get(strategy.name, {}))
                 fixed = {k: v for k, v in defaults.items() if k not in grid}
                 opt = self.optimizer.optimize(strategy, candles, grid, symbol, fixed)
+
                 if opt is not None:
                     params = opt.best_params
                     score = StrategyScore(strategy.name, opt.best_score, 0.0, 0, 0.0, 0.0, 0.0)
@@ -91,19 +99,27 @@ class RecommendationEngine:
             signal = strategy.generate_signal(candles, params)
             if signal is None:
                 continue
+
             signal.metadata["active_params"] = params
             outputs.append((signal, score))
+
             self._persist_signal(symbol, signal)
 
         return outputs
 
     def _news_gate(self, symbol: str) -> tuple[bool, str]:
         now = self.mt5.now()
-        events = self.news_provider.fetch_events(now - timedelta(hours=4), now + timedelta(hours=24))
+        events = self.news_provider.fetch_events(
+            now - timedelta(hours=4),
+            now + timedelta(hours=24),
+        )
+
         symbol_currencies = self.settings.get("news.symbols_map", {}).get(symbol, [])
         blocked, reason = self.news_filter.should_block(now, events, symbol_currencies)
+
         if blocked:
             LOGGER.info("Recommendation blocked by news filter: %s", reason)
+
         return blocked, reason
 
     def _aggregate(
@@ -119,8 +135,10 @@ class RecommendationEngine:
             return self._no_trade(symbol, timeframe, "Conflicting strategy directions")
 
         selected = buys if buys else sells
+
         confidence_weighted = 0.0
         weight_total = 0.0
+
         entry_vals: list[float] = []
         sl_vals: list[float] = []
         tp_vals: list[float] = []
@@ -129,11 +147,14 @@ class RecommendationEngine:
 
         for signal, score in selected:
             weight = max(1.0, score.score / 10.0) if score else 1.0
+
             confidence_weighted += signal.confidence * weight
             weight_total += weight
+
             entry_vals.append(signal.entry)
             sl_vals.append(signal.stop_loss)
             tp_vals.append(signal.take_profit)
+
             reasons.append(f"{signal.strategy_name}: {signal.reason}")
             names.append(signal.strategy_name)
 
@@ -151,7 +172,17 @@ class RecommendationEngine:
 
     @staticmethod
     def _no_trade(symbol: str, timeframe: str, reason: str) -> FinalRecommendation:
-        return FinalRecommendation(symbol, timeframe, "No Trade", 0.0, 0.0, 0.0, 0.0, reason, [])
+        return FinalRecommendation(
+            symbol,
+            timeframe,
+            "No Trade",
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            reason,
+            [],
+        )
 
     def _persist_signal(self, symbol: str, signal: StrategySignal) -> None:
         with self.results_path.open("a", encoding="utf-8") as handle:

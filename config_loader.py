@@ -29,6 +29,7 @@ def load_settings(path: str | Path = "config/settings.yaml") -> Settings:
     """Load YAML settings and .env values with actionable errors."""
     load_dotenv()
     settings_path = Path(path)
+
     if not settings_path.exists():
         raise FileNotFoundError(
             f"Settings file not found: {settings_path}. "
@@ -39,6 +40,8 @@ def load_settings(path: str | Path = "config/settings.yaml") -> Settings:
         payload = yaml.safe_load(handle) or {}
 
     if not isinstance(payload, dict):
-        raise ValueError(f"Settings file {settings_path} must contain a YAML mapping at the root.")
+        raise ValueError(
+            f"Settings file {settings_path} must contain a YAML mapping at the root."
+        )
 
     return Settings(raw=payload)

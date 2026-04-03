@@ -63,15 +63,18 @@ class MT5Client:
     def ensure_symbol(self, symbol: str) -> bool:
         if not self.connected or mt5 is None:
             return False
+
         info = mt5.symbol_info(symbol)
         if info is None:
             self.status_message = f"Symbol '{symbol}' is not available in MT5 terminal"
             LOGGER.warning(self.status_message)
             return False
+
         if not info.visible and not mt5.symbol_select(symbol, True):
             self.status_message = f"Could not enable symbol '{symbol}' in Market Watch"
             LOGGER.warning(self.status_message)
             return False
+
         return True
 
     def get_ohlcv(self, symbol: str, timeframe: str, bars: int) -> pd.DataFrame:
@@ -80,6 +83,7 @@ class MT5Client:
 
         mt5_tf = self._resolve_timeframe(timeframe)
         rates = mt5.copy_rates_from_pos(symbol, mt5_tf, 0, bars)
+
         if rates is None:
             self.status_message = f"Failed to fetch OHLCV data for {symbol}/{timeframe}"
             LOGGER.warning(self.status_message)
@@ -110,8 +114,10 @@ class MT5Client:
             "H4": 16388,
             "D1": 16408,
         }
+
         if mt5 is not None:
             attr = f"TIMEFRAME_{timeframe.upper()}"
             if hasattr(mt5, attr):
                 return int(getattr(mt5, attr))
+
         return fallback_map.get(timeframe.upper(), 5)

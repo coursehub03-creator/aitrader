@@ -22,7 +22,9 @@ LOGGER = logging.getLogger(__name__)
 
 def build_parser() -> argparse.ArgumentParser:
     """Create the CLI parser."""
-    parser = argparse.ArgumentParser(description="MT5 AI-assisted recommendation system (paper trading only)")
+    parser = argparse.ArgumentParser(
+        description="MT5 AI-assisted recommendation system (paper trading only)"
+    )
     parser.add_argument("--symbol", required=True, help="Symbol like EURUSD")
     parser.add_argument("--timeframe", default="M5", help="M1/M5/M15/M30/H1/H4/D1")
     parser.add_argument("--settings", default="config/settings.yaml", help="Path to settings YAML")
@@ -52,7 +54,10 @@ def main() -> None:
         ),
     )
 
-    recommendation = engine.generate(symbol=args.symbol.upper(), timeframe=args.timeframe.upper())
+    recommendation = engine.generate(
+        symbol=args.symbol.upper(),
+        timeframe=args.timeframe.upper(),
+    )
     print(json.dumps(asdict(recommendation), indent=2, default=str))
 
 
