@@ -71,6 +71,7 @@ def ensure_state() -> None:
         "last_refresh_label": "Never",
         "latest_alert_status": "n/a",
         "latest_alert_reason": "",
+        "latest_alert_type": "n/a",
         "alert_suppressed_reason": "",
         "monitoring_state": "idle",
         "watch_mode": False,
@@ -118,10 +119,12 @@ def run_cycle(service: DashboardService, symbol: str, timeframe: str, watch_mode
         service.persist_alert_event(recommendation, status, reason, triggered, alert_type)
         st.session_state.latest_alert_status = status
         st.session_state.latest_alert_reason = reason
+        st.session_state.latest_alert_type = alert_type
         st.session_state.alert_suppressed_reason = reason if status == "suppressed" else ""
     else:
         st.session_state.latest_alert_status = "not_evaluated"
         st.session_state.latest_alert_reason = "watch mode disabled"
+        st.session_state.latest_alert_type = "n/a"
     return recommendation
 
 
@@ -250,7 +253,11 @@ def render_history_panel(service: DashboardService) -> None:
 def render_alerts_panel(service: DashboardService) -> None:
     alerts = prepare_alert_rows(service.recent_alert_events(limit=80), limit=80)
     st.dataframe(alerts if not alerts.empty else pd.DataFrame([{"info": "No alerts yet"}]), use_container_width=True, hide_index=True, height=320)
-    st.caption(f"Telegram status: {st.session_state.latest_alert_status} | reason: {st.session_state.latest_alert_reason or 'n/a'}")
+    st.caption(
+        f"Telegram status: {st.session_state.latest_alert_status} | "
+        f"type: {st.session_state.latest_alert_type} | "
+        f"reason: {st.session_state.latest_alert_reason or 'n/a'}"
+    )
 
 
 def render_learning_health(payload: dict) -> None:

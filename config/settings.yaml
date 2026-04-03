@@ -220,6 +220,7 @@ recommendation:
 monitoring:
   interval_seconds: 300
   alert_cooldown_seconds: 900
+  alert_duplicate_window_seconds: 1800
   send_rejected_alerts: false
   send_summary_alerts: false
   minimum_signal_strength_for_alert: strong

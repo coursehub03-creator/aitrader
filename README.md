@@ -299,6 +299,50 @@ npm run dev
   - latest alert status (`sent`, `suppressed`, `failed`, `not_evaluated`)
   - latest alert reason and alert history table
 
+### Telegram alert setup (practical operator mode)
+
+Alerts are intentionally strict and only fire when all of these conditions pass:
+
+- market is `open`
+- news gate is not `blocked`
+- action is `BUY` or `SELL`
+- signal strength is at least `strong`
+- confidence >= `monitoring.minimum_confidence_for_alert`
+- risk/reward >= `recommendation.min_risk_reward`
+
+Suppression controls:
+
+- `monitoring.alert_cooldown_seconds`: suppress repeat alerts by symbol/timeframe/action.
+- `monitoring.alert_duplicate_window_seconds`: suppress near-identical setups using persisted signal fingerprints.
+- Alert history is persisted in JSONL/CSV logs so suppression state survives process restarts.
+
+#### Configuration in `config/settings.yaml`
+
+```yaml
+monitoring:
+  alert_cooldown_seconds: 900
+  alert_duplicate_window_seconds: 1800
+  send_rejected_alerts: false
+  minimum_signal_strength_for_alert: strong
+  minimum_confidence_for_alert: 0.6
+  telegram:
+    enabled: false
+    bot_token: ""
+    chat_id: ""
+    timeout_seconds: 10
+```
+
+#### Environment variable overrides
+
+- `TELEGRAM_ENABLED=1`
+- `TELEGRAM_BOT_TOKEN=...`
+- `TELEGRAM_CHAT_ID=...`
+- `TELEGRAM_TIMEOUT_SECONDS=10`
+- `TELEGRAM_SEND_REJECTED_ALERTS=false` (optional, default `false`)
+- `TELEGRAM_SEND_SUMMARY_ALERTS=false` (optional, default `false`)
+
+Rejected-signal alerts are optional and disabled by default for operator signal quality.
+
 ### Status meanings in the dashboard
 
 `market_status`:

@@ -15,6 +15,13 @@ from core.types import FinalRecommendation
 LOGGER = logging.getLogger(__name__)
 
 
+def _env_bool(name: str, default: bool = False) -> bool:
+    raw = os.getenv(name)
+    if raw is None:
+        return default
+    return raw.strip().lower() in {"1", "true", "yes", "on"}
+
+
 @dataclass(slots=True)
 class TelegramConfig:
     enabled: bool = False
@@ -34,6 +41,7 @@ class TelegramNotifier:
     @classmethod
     def from_settings(cls, settings: Any) -> "TelegramNotifier":
         telegram_root = settings.get("monitoring.telegram", {}) if hasattr(settings, "get") else {}
+        enabled_setting = bool(settings.get("monitoring.telegram.enabled", False)) if hasattr(settings, "get") else False
         token = str(
             (telegram_root.get("bot_token") if isinstance(telegram_root, dict) else "")
             or os.getenv("TELEGRAM_BOT_TOKEN")
@@ -46,12 +54,18 @@ class TelegramNotifier:
         )
         return cls(
             TelegramConfig(
-                enabled=bool(settings.get("monitoring.telegram.enabled", False)),
+                enabled=_env_bool("TELEGRAM_ENABLED", enabled_setting),
                 bot_token=token,
                 chat_id=chat_id,
-                timeout_seconds=float(settings.get("monitoring.telegram.timeout_seconds", 10)),
-                send_rejected_alerts=bool(settings.get("monitoring.send_rejected_alerts", False)),
-                send_summary_alerts=bool(settings.get("monitoring.send_summary_alerts", False)),
+                timeout_seconds=float(os.getenv("TELEGRAM_TIMEOUT_SECONDS", str(settings.get("monitoring.telegram.timeout_seconds", 10)))),
+                send_rejected_alerts=_env_bool(
+                    "TELEGRAM_SEND_REJECTED_ALERTS",
+                    bool(settings.get("monitoring.send_rejected_alerts", False)),
+                ),
+                send_summary_alerts=_env_bool(
+                    "TELEGRAM_SEND_SUMMARY_ALERTS",
+                    bool(settings.get("monitoring.send_summary_alerts", False)),
+                ),
             )
         )
 

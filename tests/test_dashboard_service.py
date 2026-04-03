@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime
+import time
 
 import pandas as pd
 from core.types import FinalRecommendation, SignalAction
@@ -241,3 +242,56 @@ def test_optimizer_leaderboard_by_symbol_reads_report(tmp_path) -> None:
     board = service.optimizer_leaderboard_by_symbol()
     assert not board.empty
     assert board.loc[0, "symbol"] == "EURUSD"
+
+
+def test_evaluate_and_send_alert_suppresses_by_duplicate_history(tmp_path, monkeypatch) -> None:
+    service = DashboardService.__new__(DashboardService)
+    service.alert_state_path = tmp_path / "alert_state.json"
+    service.alert_sent_history_path = tmp_path / "alert_sent_history.jsonl"
+    service.settings = type(
+        "S",
+        (),
+        {
+            "get": lambda self, key, default=None: {
+                "monitoring.minimum_confidence_for_alert": 0.6,
+                "recommendation.min_confidence": 0.6,
+                "recommendation.min_risk_reward": 1.5,
+                "monitoring.minimum_signal_strength_for_alert": "strong",
+                "monitoring.send_rejected_alerts": False,
+                "monitoring.alert_cooldown_seconds": 1,
+                "monitoring.alert_duplicate_window_seconds": 3600,
+            }.get(key, default)
+        },
+    )()
+
+    rec = FinalRecommendation(
+        symbol="EURUSD",
+        timeframe="M5",
+        action=SignalAction.BUY,
+        market_price=1.1,
+        entry=1.1,
+        stop_loss=1.09,
+        take_profit=1.12,
+        risk_reward=2.0,
+        confidence=0.8,
+        selected_strategy="trend_rsi",
+        market_status="open",
+        news_status="clear",
+        signal_strength="strong",
+        reasons=["ok"],
+        timestamp=datetime(2026, 1, 1),
+    )
+
+    class _FakeNotifier:
+        def send_recommendation_alert(self, recommendation, alert_type="strong_trade_alert"):
+            return True, "sent"
+
+    monkeypatch.setattr(dashboard_module.TelegramNotifier, "from_settings", lambda _settings: _FakeNotifier())
+
+    first = service.evaluate_and_send_alert(rec)
+    time.sleep(1.05)
+    second = service.evaluate_and_send_alert(rec)
+
+    assert first[0] == "sent"
+    assert second[0] == "suppressed"
+    assert second[1] == "duplicate_suppressed_by_history"

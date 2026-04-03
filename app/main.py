@@ -14,7 +14,7 @@ from config_loader import load_settings
 from core.mt5_client import MT5Client
 from learning.optimizer import ParameterOptimizer
 from logs.logger import configure_logging
-from monitoring.alerts import AlertPolicy, AlertCooldownStore
+from monitoring.alerts import AlertCooldownStore, AlertHistoryStore, AlertPolicy
 from news.filter import NewsFilter
 from news.providers import build_news_provider
 from notification.telegram_notifier import TelegramConfig, TelegramNotifier
@@ -25,6 +25,7 @@ LOGGER = logging.getLogger(__name__)
 MONITOR_LOG_PATH = Path("logs/monitor_cycles.jsonl")
 ALERT_LOG_PATH = Path("logs/alert_history.jsonl")
 ALERT_STATE_PATH = Path("logs/alert_state.json")
+ALERT_SENT_HISTORY_PATH = Path("logs/alert_sent_history.jsonl")
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -229,6 +230,10 @@ def run(engine: RecommendationEngine, args: argparse.Namespace, settings: Any | 
     configured_cooldown = int(settings.get("monitoring.alert_cooldown_seconds", 900)) if hasattr(settings, "get") else 900
     cooldown_seconds = int(args.cooldown) if args.cooldown is not None else configured_cooldown
     cooldown_store = AlertCooldownStore(ALERT_STATE_PATH, cooldown_seconds=cooldown_seconds)
+    history_store = AlertHistoryStore(
+        ALERT_SENT_HISTORY_PATH,
+        duplicate_window_seconds=int(settings.get("monitoring.alert_duplicate_window_seconds", 1800)) if hasattr(settings, "get") else 1800,
+    )
     notifier = _build_telegram_notifier(settings) if hasattr(settings, "get") else TelegramNotifier(TelegramConfig())
 
     while True:
@@ -258,13 +263,20 @@ def run(engine: RecommendationEngine, args: argparse.Namespace, settings: Any | 
 
                 if should_alert:
                     key = cooldown_store.build_key(recommendation)
-                    can_send, cooldown_reason = cooldown_store.can_send(key, datetime.now(tz=timezone.utc))
+                    now = datetime.now(tz=timezone.utc)
+                    can_send, cooldown_reason = cooldown_store.can_send(key, now)
                     if can_send:
-                        sent, send_reason = notifier.send_recommendation_alert(recommendation, alert_type=alert_type)
-                        alert_status = "sent" if sent else "failed"
-                        alert_reason = send_reason
-                        if sent:
-                            cooldown_store.mark_sent(key, datetime.now(tz=timezone.utc))
+                        history_ok, history_reason, _ = history_store.suppress_duplicate(recommendation, now)
+                        if history_ok:
+                            sent, send_reason = notifier.send_recommendation_alert(recommendation, alert_type=alert_type)
+                            alert_status = "sent" if sent else "failed"
+                            alert_reason = send_reason
+                            if sent:
+                                cooldown_store.mark_sent(key, now)
+                                history_store.mark_sent(recommendation, now)
+                        else:
+                            alert_status = "suppressed"
+                            alert_reason = history_reason
                     else:
                         alert_status = "suppressed"
                         alert_reason = cooldown_reason
