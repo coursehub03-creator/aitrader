@@ -56,6 +56,7 @@ class DashboardService:
         self.history_pipeline = HistoricalDataPipeline(self._build_mt5_client(), persistence=self.persistence)
         self.recent_recommendations_path = Path("logs/ui_recent_recommendations.csv")
         self.alert_history_path = Path("logs/ui_alert_history.csv")
+        self.monitor_cycles_path = Path("logs/ui_monitor_cycles.jsonl")
         self.alert_state_path = Path("logs/ui_alert_state.json")
         self.alert_sent_history_path = Path("logs/ui_alert_sent_history.jsonl")
         self.trade_csv_path = Path("logs/paper_trades.csv")
@@ -73,6 +74,76 @@ class DashboardService:
             "spread_state",
             "session_state",
         ]
+
+    def persist_monitor_cycle(
+        self,
+        recommendation: FinalRecommendation | None,
+        *,
+        cycle_id: int,
+        symbol: str,
+        timeframe: str,
+        monitor_status: str,
+        market_refresh_message: str,
+        market_status: str,
+        news_status: str,
+        alert_status: str,
+        alert_reason: str,
+        error: str = "",
+    ) -> None:
+        self.monitor_cycles_path.parent.mkdir(parents=True, exist_ok=True)
+        payload: dict[str, Any] = {
+            "timestamp": datetime.now(tz=timezone.utc).isoformat(timespec="seconds"),
+            "cycle_id": int(cycle_id),
+            "symbol": symbol.upper(),
+            "timeframe": timeframe.upper(),
+            "monitor_status": monitor_status,
+            "market_refresh_message": market_refresh_message,
+            "market_status": market_status,
+            "news_status": news_status,
+            "alert_status": alert_status,
+            "alert_reason": alert_reason,
+            "error": error,
+        }
+        if recommendation is not None:
+            payload["recommendation"] = self.recommendation_to_record(recommendation)
+        with self.monitor_cycles_path.open("a", encoding="utf-8") as handle:
+            handle.write(json.dumps(payload) + "\n")
+
+    def run_monitor_cycle(self, symbol: str, timeframe: str, *, watch_mode: bool, cycle_id: int) -> tuple[FinalRecommendation, dict[str, str]]:
+        market_frame, refresh_message = self.refresh_market_data(symbol, timeframe, bars=300)
+        market_status, _ = self.connection_status(symbol, timeframe)
+        recommendation = self.generate_recommendation(symbol, timeframe)
+        news_events = self.recent_news_events(symbol)
+        news_status = recommendation.news_status
+        if not news_events and news_status == "clear":
+            news_status = "clear_no_events"
+
+        alert_status = "not_evaluated"
+        alert_reason = "watch mode disabled"
+        alert_type = "n/a"
+        if watch_mode:
+            alert_status, alert_reason, triggered, alert_type = self.evaluate_and_send_alert(recommendation)
+            self.persist_alert_event(recommendation, alert_status, alert_reason, triggered, alert_type)
+
+        self.persist_monitor_cycle(
+            recommendation,
+            cycle_id=cycle_id,
+            symbol=symbol,
+            timeframe=timeframe,
+            monitor_status="running" if watch_mode else "polling",
+            market_refresh_message=refresh_message if not market_frame.empty else "Market data unavailable",
+            market_status=market_status,
+            news_status=news_status,
+            alert_status=alert_status,
+            alert_reason=alert_reason,
+        )
+        return recommendation, {
+            "market_status": market_status,
+            "news_status": news_status,
+            "alert_status": alert_status,
+            "alert_reason": alert_reason,
+            "alert_type": alert_type,
+        }
 
     @staticmethod
     def _safe_read_csv(path: Path, columns: list[str], *, dataset_name: str) -> pd.DataFrame:
