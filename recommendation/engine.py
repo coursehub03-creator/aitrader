@@ -45,13 +45,51 @@ class RecommendationEngine:
     def generate(self, symbol: str, timeframe: str) -> FinalRecommendation:
         run_timestamp = datetime.utcnow()
         market_price = 0.0
+        market_status = "unavailable"
         self.mt5.connect()
         try:
             if not self.mt5.connected:
-                return self._no_trade(symbol, timeframe, self.mt5.status_message, "blocked", run_timestamp, market_price)
+                return self._no_trade(
+                    symbol,
+                    timeframe,
+                    self.mt5.status_message,
+                    "blocked",
+                    "mt5_unavailable",
+                    run_timestamp,
+                    market_price,
+                )
 
-            if not self.mt5.ensure_symbol(symbol):
-                return self._no_trade(symbol, timeframe, self.mt5.status_message, "blocked", run_timestamp, market_price)
+            market_status, market_reason = self.mt5.detect_market_status(symbol, timeframe)
+            if market_status == "mt5_unavailable":
+                return self._no_trade(
+                    symbol,
+                    timeframe,
+                    market_reason,
+                    "blocked",
+                    market_status,
+                    run_timestamp,
+                    market_price,
+                )
+            if market_status == "unavailable":
+                return self._no_trade(
+                    symbol,
+                    timeframe,
+                    market_reason,
+                    "blocked",
+                    market_status,
+                    run_timestamp,
+                    market_price,
+                )
+            if market_status == "closed":
+                return self._no_trade(
+                    symbol,
+                    timeframe,
+                    f"Market is closed for {symbol}: {market_reason}",
+                    "clear",
+                    market_status,
+                    run_timestamp,
+                    market_price,
+                )
 
             candles = self.mt5.get_ohlcv(
                 symbol,
@@ -60,12 +98,12 @@ class RecommendationEngine:
             )
             if candles.empty:
                 reason = self.mt5.status_message or f"No market data for {symbol}/{timeframe}"
-                return self._no_trade(symbol, timeframe, reason, "blocked", run_timestamp, market_price)
+                return self._no_trade(symbol, timeframe, reason, "blocked", market_status, run_timestamp, market_price)
             market_price = float(candles.iloc[-1]["close"])
 
             blocked, news_status, reason, confidence_multiplier = self._news_gate(symbol)
             if blocked:
-                return self._no_trade(symbol, timeframe, reason, news_status, run_timestamp, market_price)
+                return self._no_trade(symbol, timeframe, reason, news_status, market_status, run_timestamp, market_price)
 
             strategy_outputs = self._run_strategies(symbol, candles)
             if not strategy_outputs:
@@ -74,6 +112,7 @@ class RecommendationEngine:
                     timeframe,
                     "No strategy produced an actionable signal",
                     news_status,
+                    market_status,
                     run_timestamp,
                     market_price,
                 )
@@ -86,6 +125,7 @@ class RecommendationEngine:
                 confidence_multiplier,
                 news_status,
                 reason,
+                market_status,
                 run_timestamp,
             )
             LOGGER.info("Final recommendation generated\n%s", self.format_for_terminal(recommendation))
@@ -204,6 +244,7 @@ class RecommendationEngine:
         confidence_multiplier: float = 1.0,
         news_status: str = "clear",
         news_reason: str = "No relevant blocking events",
+        market_status: str = "open",
         timestamp: datetime | None = None,
     ) -> FinalRecommendation:
         buys = [item for item in strategy_outputs if item[0].action == SignalAction.BUY]
@@ -215,6 +256,7 @@ class RecommendationEngine:
                 timeframe,
                 "Conflicting strategy directions",
                 news_status,
+                market_status,
                 timestamp or datetime.utcnow(),
                 market_price,
             )
@@ -267,7 +309,15 @@ class RecommendationEngine:
                 if excluded_names
                 else "No strategies available after aggregation"
             )
-            return self._no_trade(symbol, timeframe, reason, news_status, timestamp or datetime.utcnow(), market_price)
+            return self._no_trade(
+                symbol,
+                timeframe,
+                reason,
+                news_status,
+                market_status,
+                timestamp or datetime.utcnow(),
+                market_price,
+            )
 
         avg_entry = float(sum(entry_vals) / len(entry_vals))
         avg_sl = float(sum(sl_vals) / len(sl_vals))
@@ -288,6 +338,7 @@ class RecommendationEngine:
             confidence=float((confidence_weighted / weight_total) * confidence_multiplier),
             strategy_name=names[0] if len(names) == 1 else "+".join(names),
             selected_strategy_name=names[0] if len(names) == 1 else "+".join(names),
+            market_status=market_status,
             news_status=news_status,
             reasons=reasons,
             timestamp=timestamp or datetime.utcnow(),
@@ -299,6 +350,7 @@ class RecommendationEngine:
         timeframe: str,
         reason: str,
         news_status: str,
+        market_status: str,
         timestamp: datetime,
         market_price: float,
     ) -> FinalRecommendation:
@@ -314,6 +366,7 @@ class RecommendationEngine:
             confidence=0.0,
             strategy_name="none",
             selected_strategy_name="none",
+            market_status=market_status,
             news_status=news_status,
             reasons=[reason],
             timestamp=timestamp,
@@ -332,6 +385,7 @@ class RecommendationEngine:
         lines = [
             "╔══════════════════════════ FINAL RECOMMENDATION ══════════════════════════╗",
             f"║ Symbol/TF         : {recommendation.symbol}/{recommendation.timeframe}",
+            f"║ Market Status     : {recommendation.market_status}",
             f"║ Action            : {recommendation.final_action}",
             f"║ Market Price      : {recommendation.market_price:.5f}",
             f"║ Entry / SL / TP   : {recommendation.entry:.5f} / {recommendation.stop_loss:.5f} / {recommendation.take_profit:.5f}",

@@ -1,6 +1,8 @@
 from dataclasses import dataclass
 from datetime import datetime
 
+import pandas as pd
+
 from core.types import NewsEvent
 from core.types import SignalAction, StrategyScore, StrategySignal
 from news.filter import NewsFilter
@@ -14,7 +16,8 @@ class _Dummy:
 
 
 class _FakeOptimizer:
-    pass
+    def optimize(self, *args, **kwargs):
+        return None
 
 
 def _engine() -> RecommendationEngine:
@@ -85,11 +88,20 @@ def test_aggregate_excludes_very_weak_strategies() -> None:
 
 def test_format_for_terminal_contains_core_fields() -> None:
     engine = _engine()
-    rec = engine._no_trade("EURUSD", "M5", "News effect: High-impact news window", "blocked", datetime.utcnow(), 1.1)
+    rec = engine._no_trade(
+        "EURUSD",
+        "M5",
+        "News effect: High-impact news window",
+        "blocked",
+        "closed",
+        datetime.utcnow(),
+        1.1,
+    )
 
     formatted = engine.format_for_terminal(rec)
 
     assert "FINAL RECOMMENDATION" in formatted
+    assert "Market Status" in formatted
     assert "Action            :" in formatted
     assert "News Status" in formatted
     assert "REASONS" in formatted
@@ -115,3 +127,96 @@ def test_news_gate_returns_unknown_when_provider_fails() -> None:
     assert news_status == "unknown"
     assert "unavailable" in reason
     assert confidence_multiplier == 1.0
+
+
+class _FakeMT5:
+    def __init__(self, market_status: str, reason: str = "") -> None:
+        self.market_status = market_status
+        self.reason = reason or market_status
+        self.connected = True
+        self.status_message = reason
+
+    def connect(self) -> bool:
+        self.connected = self.market_status != "mt5_unavailable"
+        if not self.connected:
+            self.status_message = "MT5 unavailable"
+        return self.connected
+
+    def detect_market_status(self, symbol: str, timeframe: str) -> tuple[str, str]:
+        return self.market_status, self.reason
+
+    def get_ohlcv(self, symbol: str, timeframe: str, bars: int) -> pd.DataFrame:
+        now = pd.Timestamp.utcnow()
+        return pd.DataFrame(
+            [
+                {"time": now, "open": 1.1, "high": 1.11, "low": 1.09, "close": 1.105, "volume": 100},
+                {"time": now, "open": 1.105, "high": 1.12, "low": 1.1, "close": 1.11, "volume": 100},
+            ]
+        )
+
+    def now(self) -> datetime:
+        return datetime.utcnow()
+
+    def shutdown(self) -> None:
+        return None
+
+
+class _FakeProvider:
+    def fetch_events(self, from_time: datetime, to_time: datetime) -> list[NewsEvent]:
+        return []
+
+
+def _build_engine_with_market_status(status: str, reason: str = "") -> RecommendationEngine:
+    return RecommendationEngine(
+        mt5_client=_FakeMT5(status, reason),
+        news_provider=_FakeProvider(),
+        news_filter=NewsFilter(30, 15),
+        strategies=[],
+        settings={"app.data_bars": 50, "learning.optimization_enabled": False},
+        optimizer=_FakeOptimizer(),
+    )
+
+
+def test_generate_market_open_status() -> None:
+    engine = _build_engine_with_market_status("open", "market is open")
+    signal = StrategySignal("test_strategy", SignalAction.BUY, 1.11, 1.1, 1.13, 0.75, ["trend up"])
+    engine._run_strategies = lambda symbol, candles: [(signal, None)]  # type: ignore[method-assign]
+
+    rec = engine.generate("EURUSD", "M5")
+
+    assert rec.market_status == "open"
+    assert rec.final_action == SignalAction.BUY
+    assert rec.entry > 0
+    assert rec.confidence > 0
+
+
+def test_generate_market_closed_status_forces_no_trade() -> None:
+    engine = _build_engine_with_market_status("closed", "session is closed")
+
+    rec = engine.generate("EURUSD", "M5")
+
+    assert rec.market_status == "closed"
+    assert rec.final_action == SignalAction.NO_TRADE
+    assert "market is closed" in rec.reasons[0].lower()
+    assert rec.entry == 0.0
+    assert rec.stop_loss == 0.0
+    assert rec.take_profit == 0.0
+    assert rec.confidence == 0.0
+
+
+def test_generate_symbol_unavailable_market_status() -> None:
+    engine = _build_engine_with_market_status("unavailable", "symbol missing")
+
+    rec = engine.generate("BADSYMBOL", "M5")
+
+    assert rec.market_status == "unavailable"
+    assert rec.final_action == SignalAction.NO_TRADE
+
+
+def test_generate_mt5_unavailable_market_status() -> None:
+    engine = _build_engine_with_market_status("mt5_unavailable", "terminal unavailable")
+
+    rec = engine.generate("EURUSD", "M5")
+
+    assert rec.market_status == "mt5_unavailable"
+    assert rec.final_action == SignalAction.NO_TRADE

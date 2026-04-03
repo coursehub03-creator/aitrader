@@ -11,6 +11,7 @@ A production-ready Python project for **AI-assisted trading recommendations** us
 ## Features
 
 - MT5 connector with safe import handling (app does not crash when the MetaTrader5 package is unavailable)
+- Market-open awareness (`market_status`: `open`, `closed`, `unavailable`, `mt5_unavailable`) before strategy aggregation
 - Multi-symbol recommendation flow (`--symbol`)
 - News provider abstraction (swappable providers)
 - ForexFactory-compatible provider implementation
@@ -91,3 +92,13 @@ tests/              # Unit tests
 - The optimizer stores top parameter candidates and writes JSON reports to `learning.optimization_report_dir` (default: `logs/optimization`).
 - After each optimization cycle, only the best 2-3 strategies are activated (`learning.active_strategy_count`).
 - Reports include the winning parameter sets and rationale for why they were selected.
+
+## Market Status Behavior
+
+- The recommendation engine checks market tradability *before* generating strategy output.
+- Market status is attached to every final response via `market_status` with values:
+  - `open` → normal strategy/news flow continues.
+  - `closed` → engine returns `NO_TRADE` and neutralized entry/SL/TP/confidence values.
+  - `unavailable` → symbol is missing or not tradable in MT5, returns `NO_TRADE`.
+  - `mt5_unavailable` → MT5 package/terminal is unavailable, returns `NO_TRADE`.
+- Terminal output now prints **Market Status** near the top so the operator sees session availability before reviewing strategy details.
