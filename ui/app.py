@@ -52,10 +52,12 @@ def ensure_state() -> None:
     defaults = {
         "last_recommendation": None,
         "last_refresh": None,
+        "last_refresh_label": "Never",
         "debug_logs": [],
         "market_snapshot": pd.DataFrame(),
         "optimizer_table": pd.DataFrame(),
         "simulated_trades": pd.DataFrame(),
+        "recommendation_history": [],
     }
     for key, value in defaults.items():
         if key not in st.session_state:
@@ -81,42 +83,31 @@ def action_theme(recommendation: FinalRecommendation) -> tuple[str, str]:
 def normalize_recommendation(recommendation: FinalRecommendation) -> FinalRecommendation:
     if recommendation.market_status == "closed":
         recommendation.action = SignalAction.NO_TRADE
-        recommendation.reasons = recommendation.reasons + ["Market Closed: Trading recommendation suppressed by policy."]
+        if "Market Closed: Trading recommendation suppressed by policy." not in recommendation.reasons:
+            recommendation.reasons = recommendation.reasons + ["Market Closed: Trading recommendation suppressed by policy."]
     if recommendation.news_status == "blocked":
         recommendation.action = SignalAction.NO_TRADE
     return recommendation
 
 
-def render_header(connection_status: str, last_refresh: str) -> None:
+def render_header() -> None:
     st.markdown(THEME_CSS, unsafe_allow_html=True)
-    col_left, col_right = st.columns([3, 2])
-    with col_left:
-        st.markdown('<p class="dashboard-title">AITrader Operator Dashboard</p>', unsafe_allow_html=True)
-        st.markdown(
-            '<p class="dashboard-subtitle">Premium local-first decision cockpit for MT5 recommendation workflows.</p>',
-            unsafe_allow_html=True,
-        )
-    with col_right:
-        st.markdown(
-            f"""
-            <div class="status-card">
-              <div class="status-label">Connection Status</div>
-              <div class="status-value">{connection_status}</div>
-              <div class="status-label" style="margin-top:0.5rem;">Last Refresh</div>
-              <div class="status-value" style="font-size:1rem;">{last_refresh}</div>
-            </div>
-            """,
-            unsafe_allow_html=True,
-        )
+    st.markdown('<p class="dashboard-title">AITrader Operator Dashboard</p>', unsafe_allow_html=True)
+    st.markdown(
+        '<p class="dashboard-subtitle">Premium local-first decision cockpit for MT5 recommendation workflows.</p>',
+        unsafe_allow_html=True,
+    )
 
 
-def render_status_cards(recommendation: FinalRecommendation) -> None:
-    cards = st.columns(5)
-    cards[0].metric("Symbol", recommendation.symbol)
-    cards[1].metric("Timeframe", recommendation.timeframe)
-    cards[2].metric("Market Status", recommendation.market_status)
-    cards[3].metric("News Status", recommendation.news_status)
-    cards[4].metric("Selected Strategy", recommendation.selected_strategy)
+def render_status_cards(connection_status: str, recommendation: FinalRecommendation | None) -> None:
+    market_status = recommendation.market_status if recommendation else "n/a"
+    news_status = recommendation.news_status if recommendation else "n/a"
+    refresh_text = st.session_state.last_refresh_label
+    cards = st.columns(4)
+    cards[0].metric("MT5 Connection", connection_status)
+    cards[1].metric("Market Status", market_status)
+    cards[2].metric("News Status", news_status)
+    cards[3].metric("Last Refresh", refresh_text)
 
 
 def render_recommendation_summary(recommendation: FinalRecommendation) -> None:
@@ -153,6 +144,27 @@ def render_recommendation_summary(recommendation: FinalRecommendation) -> None:
     st.metric("Risk / Reward", f"{recommendation.risk_reward:.2f}")
 
 
+def render_recommendation_detail_table(recommendation: FinalRecommendation) -> None:
+    st.markdown("### Live Recommendation Output")
+    action = recommendation.action.value if hasattr(recommendation.action, "value") else str(recommendation.action)
+    rows = [
+        ("symbol", recommendation.symbol),
+        ("timeframe", recommendation.timeframe),
+        ("timestamp", recommendation.timestamp.replace(tzinfo=timezone.utc).isoformat(timespec="seconds")),
+        ("market_status", recommendation.market_status),
+        ("news_status", recommendation.news_status),
+        ("selected_strategy", recommendation.selected_strategy),
+        ("action", action),
+        ("entry", f"{recommendation.entry:.5f}"),
+        ("stop_loss", f"{recommendation.stop_loss:.5f}"),
+        ("take_profit", f"{recommendation.take_profit:.5f}"),
+        ("confidence", f"{recommendation.confidence:.2%}"),
+        ("risk_reward", f"{recommendation.risk_reward:.2f}"),
+        ("reasons", " | ".join(recommendation.reasons)),
+    ]
+    st.dataframe(pd.DataFrame(rows, columns=["field", "value"]), use_container_width=True, hide_index=True)
+
+
 def render_market_news_panel(recommendation: FinalRecommendation) -> None:
     st.markdown("### Market and News Status")
     with st.container(border=True):
@@ -176,11 +188,25 @@ def render_strategy_diagnostics(recommendation: FinalRecommendation) -> None:
 
 def render_recent_recommendations(service: DashboardService) -> None:
     st.markdown("### Recent Recommendations")
+    session_recent = pd.DataFrame(st.session_state.recommendation_history).tail(50).iloc[::-1]
     recent = service.recent_recommendations(limit=50)
     if recent.empty:
-        st.info("No recent recommendations saved yet.")
-        return
-    st.dataframe(recent, use_container_width=True, hide_index=True)
+        if session_recent.empty:
+            st.info("No recent recommendations saved yet.")
+            return
+        recent = session_recent
+    elif not session_recent.empty:
+        recent = pd.concat([session_recent, recent], ignore_index=True).drop_duplicates(subset=["timestamp", "symbol", "selected_strategy", "action"], keep="first")
+    keep_cols = [
+        "timestamp",
+        "symbol",
+        "action",
+        "confidence",
+        "selected_strategy",
+        "market_status",
+        "news_status",
+    ]
+    st.dataframe(recent[keep_cols], use_container_width=True, hide_index=True)
 
 
 def render_paper_trading_panel(service: DashboardService) -> None:
@@ -218,6 +244,13 @@ def render_debug_panel() -> None:
             return
         for line in st.session_state.debug_logs:
             st.code(line)
+
+
+def render_placeholder() -> None:
+    with st.container(border=True):
+        st.markdown("### Live Recommendation Output")
+        st.info("Press **Get Recommendation** to analyze the selected market.")
+        st.caption("Once generated, action, risk levels, confidence, reasons, and status details will appear here.")
 
 
 def sidebar_controls(service: DashboardService) -> tuple[str, str, bool, int, bool]:
@@ -277,28 +310,53 @@ def main() -> None:
 
     status, reason = service.connection_status(symbol, timeframe)
     connection_text = f"{status} ({reason})" if reason else status
-    last_refresh = st.session_state.last_refresh or "Never"
-    render_header(connection_text, last_refresh)
+    render_header()
 
-    if do_run or st.session_state.last_recommendation is None:
+    should_run_cycle = bool(do_run or auto_refresh)
+    if should_run_cycle:
         recommendation = service.generate_recommendation(symbol, timeframe)
         recommendation = normalize_recommendation(recommendation)
         st.session_state.last_recommendation = recommendation
-        st.session_state.last_refresh = datetime.now(timezone.utc).isoformat(timespec="seconds")
+        now = datetime.now(timezone.utc)
+        st.session_state.last_refresh = now.isoformat(timespec="seconds")
+        st.session_state.last_refresh_label = now.strftime("%Y-%m-%d %H:%M:%S UTC")
+        history = st.session_state.recommendation_history
+        history.append(
+            {
+                "timestamp": recommendation.timestamp.replace(tzinfo=timezone.utc).isoformat(timespec="seconds"),
+                "symbol": recommendation.symbol,
+                "action": recommendation.action.value if hasattr(recommendation.action, "value") else str(recommendation.action),
+                "confidence": recommendation.confidence,
+                "selected_strategy": recommendation.selected_strategy,
+                "market_status": recommendation.market_status,
+                "news_status": recommendation.news_status,
+            }
+        )
+        st.session_state.recommendation_history = history[-100:]
         log_debug(f"Recommendation generated for {symbol}/{timeframe}: action={recommendation.action}")
 
     rec: FinalRecommendation = st.session_state.last_recommendation
-    render_status_cards(rec)
+    render_status_cards(connection_text, rec)
 
     overview_tab, history_tab, strategies_tab, logs_tab = st.tabs(["Overview", "History", "Strategies", "Logs"])
 
     with overview_tab:
-        render_recommendation_summary(rec)
-        left, right = st.columns(2)
-        with left:
-            render_market_news_panel(rec)
-        with right:
-            render_strategy_diagnostics(rec)
+        if rec is None:
+            if status == "mt5_unavailable":
+                st.error("⚠️ MT5 unavailable — please open MetaTrader 5 and retry.")
+            render_placeholder()
+        else:
+            if rec.market_status == "mt5_unavailable":
+                st.error("⚠️ MT5 unavailable — recommendation quality is limited until MT5 is reachable.")
+            if rec.market_status == "closed":
+                st.warning("🚫 Market Closed — recommendation forced to NO_TRADE.")
+            render_recommendation_summary(rec)
+            render_recommendation_detail_table(rec)
+            left, right = st.columns([1.25, 1], gap="large")
+            with left:
+                render_market_news_panel(rec)
+            with right:
+                render_strategy_diagnostics(rec)
 
     with history_tab:
         render_recent_recommendations(service)
