@@ -53,6 +53,14 @@ def test_build_parser_accepts_watch_and_interval() -> None:
     assert args.interval == 120
 
 
+def test_build_parser_accepts_test_telegram_flag() -> None:
+    parser = cli.build_parser()
+
+    args = parser.parse_args(["--test-telegram"])
+
+    assert args.test_telegram is True
+
+
 def test_run_single_cycle_persists_log(tmp_path, monkeypatch, capsys) -> None:
     monkeypatch.setattr(cli, "MONITOR_LOG_PATH", tmp_path / "monitor.jsonl")
     monkeypatch.setattr(cli, "ALERT_LOG_PATH", tmp_path / "alerts.jsonl")
@@ -105,3 +113,78 @@ def test_run_watch_mode_retries_after_failure(tmp_path, monkeypatch, capsys) -> 
     second = json.loads(lines[1])
     assert first["error"] == "mt5 disconnected"
     assert second["recommendation"]["market_status"] == "mt5_unavailable"
+
+
+def test_main_test_telegram_success_exits_early(monkeypatch, capsys) -> None:
+    monkeypatch.setattr(
+        cli,
+        "load_settings",
+        lambda _path: {"app.log_level": "INFO"},
+    )
+    monkeypatch.setattr(cli, "configure_logging", lambda _level: None)
+
+    class _Notifier:
+        config = type("Config", (), {"bot_token": "token", "chat_id": "chat"})()
+
+        @staticmethod
+        def send_test_message(_text: str):
+            return True, "sent"
+
+    monkeypatch.setattr(cli, "_build_telegram_notifier", lambda _settings: _Notifier())
+    monkeypatch.setattr(
+        cli,
+        "build_engine",
+        lambda _settings: (_ for _ in ()).throw(AssertionError("build_engine should not be called")),
+    )
+    monkeypatch.setattr(
+        argparse.ArgumentParser,
+        "parse_args",
+        lambda _self: argparse.Namespace(
+            symbol=None,
+            symbols=None,
+            timeframe="M5",
+            settings="config/settings.yaml",
+            watch=False,
+            monitor=False,
+            interval=300,
+            cooldown=None,
+            test_telegram=True,
+        ),
+    )
+
+    cli.main()
+    output = capsys.readouterr().out
+    assert "Telegram connection successful" in output
+
+
+def test_main_test_telegram_missing_config(monkeypatch, capsys) -> None:
+    monkeypatch.setattr(
+        cli,
+        "load_settings",
+        lambda _path: {"app.log_level": "INFO"},
+    )
+    monkeypatch.setattr(cli, "configure_logging", lambda _level: None)
+
+    class _Notifier:
+        config = type("Config", (), {"bot_token": "", "chat_id": ""})()
+
+    monkeypatch.setattr(cli, "_build_telegram_notifier", lambda _settings: _Notifier())
+    monkeypatch.setattr(
+        argparse.ArgumentParser,
+        "parse_args",
+        lambda _self: argparse.Namespace(
+            symbol=None,
+            symbols=None,
+            timeframe="M5",
+            settings="config/settings.yaml",
+            watch=False,
+            monitor=False,
+            interval=300,
+            cooldown=None,
+            test_telegram=True,
+        ),
+    )
+
+    cli.main()
+    output = capsys.readouterr().out
+    assert "Telegram not configured. Check TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID" in output
