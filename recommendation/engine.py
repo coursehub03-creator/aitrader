@@ -12,7 +12,7 @@ import pandas as pd
 
 from core.mt5_client import MT5Client
 from core.types import FinalRecommendation, SignalAction, StrategyScore, StrategySignal
-from learning.optimizer import ParameterOptimizer
+from learning.optimizer import OptimizationResult, ParameterOptimizer
 from news.base import NewsProvider
 from news.filter import NewsFilter
 from news.symbols import currencies_for_symbol
@@ -82,31 +82,73 @@ class RecommendationEngine:
 
         grid_root = self.settings.get("learning.parameter_grid", {})
         optimization_enabled = bool(self.settings.get("learning.optimization_enabled", True))
+        active_count = max(2, min(3, int(self.settings.get("learning.active_strategy_count", 2))))
+
+        optimization_results = self._optimize_strategies(symbol, candles, grid_root, optimization_enabled)
+        active_names = self._active_strategy_names(optimization_results, active_count, optimization_enabled)
 
         for strategy in self.strategies:
+            if strategy.name not in active_names:
+                continue
+
             defaults = dict(self.settings.get(f"strategy.{strategy.name}", {}))
             params = dict(defaults)
             score: StrategyScore | None = None
 
-            if optimization_enabled:
-                grid = dict(grid_root.get(strategy.name, {}))
-                fixed = {k: v for k, v in defaults.items() if k not in grid}
-                opt = self.optimizer.optimize(strategy, candles, grid, symbol, fixed)
-
-                if opt is not None:
-                    params = opt.best_params
-                    score = StrategyScore(strategy.name, opt.best_score, 0.0, 0, 0.0, 0.0, 0.0, 0.0, 0.0)
+            opt = optimization_results.get(strategy.name)
+            if opt is not None:
+                params = opt.best_params
+                score = StrategyScore(strategy.name, opt.best_score, 0.0, 0, 0.0, 0.0, 0.0, 0.0, 0.0)
 
             signal = strategy.generate_signal(candles, params)
             if signal.action == SignalAction.NO_TRADE:
                 continue
 
             signal.metadata["active_params"] = params
+            if opt is not None:
+                signal.metadata["optimization_report"] = opt.report_path
             outputs.append((signal, score))
 
             self._persist_signal(symbol, signal)
 
         return outputs
+
+    def _optimize_strategies(
+        self,
+        symbol: str,
+        candles: pd.DataFrame,
+        grid_root: dict[str, dict[str, list[Any]]],
+        optimization_enabled: bool,
+    ) -> dict[str, OptimizationResult]:
+        if not optimization_enabled:
+            return {}
+
+        results: dict[str, OptimizationResult] = {}
+        for strategy in self.strategies:
+            defaults = dict(self.settings.get(f"strategy.{strategy.name}", {}))
+            grid = dict(grid_root.get(strategy.name, {}))
+            fixed = {k: v for k, v in defaults.items() if k not in grid}
+
+            opt = self.optimizer.optimize(strategy, candles, grid, symbol, fixed)
+            if opt is not None:
+                results[strategy.name] = opt
+        return results
+
+    def _active_strategy_names(
+        self,
+        optimization_results: dict[str, OptimizationResult],
+        active_count: int,
+        optimization_enabled: bool,
+    ) -> set[str]:
+        if optimization_enabled and optimization_results:
+            ranked = sorted(
+                optimization_results.values(),
+                key=lambda item: item.best_score,
+                reverse=True,
+            )
+            return {item.strategy_name for item in ranked[:active_count]}
+
+        return {strategy.name for strategy in self.strategies}
 
     def _news_gate(self, symbol: str) -> tuple[bool, str, float]:
         now = self.mt5.now()
