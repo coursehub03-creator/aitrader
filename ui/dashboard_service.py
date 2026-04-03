@@ -59,6 +59,35 @@ class DashboardService:
         self.trade_sqlite_path = Path("logs/paper_trades.sqlite3")
         self.learning_dir = Path("logs/learning")
         self.learning_metadata_path = self.learning_dir / "learning_metadata.json"
+        self._trade_columns = [
+            *TradeStore.REQUIRED_COLUMNS,
+            "timeframe",
+            "strategy",
+            "result",
+            "signal_strength",
+            "market_conditions",
+            "news_status",
+            "spread_state",
+            "session_state",
+        ]
+
+    @staticmethod
+    def _safe_read_csv(path: Path, columns: list[str], *, dataset_name: str) -> pd.DataFrame:
+        try:
+            frame = pd.read_csv(path)
+        except (FileNotFoundError, pd.errors.EmptyDataError):
+            return pd.DataFrame(columns=columns)
+        except pd.errors.ParserError as exc:
+            LOGGER.warning("Dataset '%s' is malformed at %s: %s", dataset_name, path, exc)
+            return pd.DataFrame(columns=columns)
+        except Exception as exc:  # pragma: no cover - defensive fallback
+            LOGGER.warning("Dataset '%s' could not be loaded from %s: %s", dataset_name, path, exc)
+            return pd.DataFrame(columns=columns)
+
+        for column in columns:
+            if column not in frame.columns:
+                frame[column] = ""
+        return frame[columns]
 
     def fetch_historical_data(
         self,
@@ -204,7 +233,11 @@ class DashboardService:
         row = pd.DataFrame([self.recommendation_to_record(recommendation)])
         self.recent_recommendations_path.parent.mkdir(parents=True, exist_ok=True)
         if self.recent_recommendations_path.exists():
-            existing = pd.read_csv(self.recent_recommendations_path)
+            existing = self._safe_read_csv(
+                self.recent_recommendations_path,
+                list(row.columns),
+                dataset_name="ui_recent_recommendations",
+            )
             combined = pd.concat([existing, row], ignore_index=True)
         else:
             combined = row
@@ -239,22 +272,38 @@ class DashboardService:
         )
         self.alert_history_path.parent.mkdir(parents=True, exist_ok=True)
         if self.alert_history_path.exists():
-            existing = pd.read_csv(self.alert_history_path)
+            existing = self._safe_read_csv(self.alert_history_path, list(row.columns), dataset_name="ui_alert_history")
             combined = pd.concat([existing, row], ignore_index=True)
         else:
             combined = row
         combined.tail(500).to_csv(self.alert_history_path, index=False)
 
     def recent_alert_events(self, limit: int = 50) -> pd.DataFrame:
-        if not self.alert_history_path.exists():
-            return pd.DataFrame()
-        frame = pd.read_csv(self.alert_history_path)
+        frame = self._safe_read_csv(
+            self.alert_history_path,
+            [
+                "timestamp",
+                "symbol",
+                "timeframe",
+                "alert_type",
+                "message_summary",
+                "sent",
+                "suppressed",
+                "suppression_reason",
+                "status",
+                "reason",
+                "triggered",
+            ],
+            dataset_name="ui_alert_history",
+        )
         return frame.tail(limit).iloc[::-1].reset_index(drop=True)
 
     def recent_recommendations(self, limit: int = 50) -> pd.DataFrame:
-        if not self.recent_recommendations_path.exists():
-            return pd.DataFrame()
-        frame = pd.read_csv(self.recent_recommendations_path)
+        frame = self._safe_read_csv(
+            self.recent_recommendations_path,
+            list(self.recommendation_to_record(self._empty_recommendation()).keys()),
+            dataset_name="ui_recent_recommendations",
+        )
         return frame.tail(limit).iloc[::-1].reset_index(drop=True)
 
     def refresh_market_data(self, symbol: str, timeframe: str, bars: int = 300) -> tuple[pd.DataFrame, str]:
@@ -382,10 +431,8 @@ class DashboardService:
             mt5.shutdown()
 
     def load_paper_trades(self, limit: int = 200) -> pd.DataFrame:
-        if not self.trade_csv_path.exists():
-            return pd.DataFrame(columns=TradeStore.REQUIRED_COLUMNS)
-        frame = pd.read_csv(self.trade_csv_path)
-        for col, val in {
+        frame = self._safe_read_csv(self.trade_csv_path, self._trade_columns, dataset_name="paper_trades")
+        defaults = {
             "timeframe": "",
             "strategy": "",
             "result": "",
@@ -394,9 +441,9 @@ class DashboardService:
             "news_status": "unknown",
             "spread_state": "unknown",
             "session_state": "unknown",
-        }.items():
-            if col not in frame.columns:
-                frame[col] = val
+        }
+        for col, val in defaults.items():
+            frame[col] = frame[col].replace("", val).fillna(val)
         return frame.tail(limit).iloc[::-1].reset_index(drop=True)
 
     @staticmethod
@@ -728,7 +775,15 @@ class DashboardService:
         self.learning_dir.mkdir(parents=True, exist_ok=True)
         payload: dict[str, Any]
         if self.learning_metadata_path.exists():
-            payload = json.loads(self.learning_metadata_path.read_text(encoding="utf-8"))
+            try:
+                raw = self.learning_metadata_path.read_text(encoding="utf-8").strip()
+                payload = json.loads(raw) if raw else {}
+            except json.JSONDecodeError as exc:
+                LOGGER.warning("Learning metadata is malformed at %s: %s. Reinitializing metadata.", self.learning_metadata_path, exc)
+                payload = {}
+            except Exception as exc:
+                LOGGER.warning("Learning metadata could not be loaded at %s: %s. Reinitializing metadata.", self.learning_metadata_path, exc)
+                payload = {}
         else:
             payload = {}
         payload.update(kwargs)
@@ -749,7 +804,7 @@ class DashboardService:
         )
         path = self.learning_dir / "learning_events.csv"
         if path.exists():
-            existing = pd.read_csv(path)
+            existing = self._safe_read_csv(path, list(row.columns), dataset_name="learning_events")
             row = pd.concat([existing, row], ignore_index=True).tail(500)
         row.to_csv(path, index=False)
 
@@ -778,6 +833,30 @@ class DashboardService:
         )
         path = self.learning_dir / "strategy_state_changes.csv"
         if path.exists():
-            existing = pd.read_csv(path)
+            existing = self._safe_read_csv(path, list(row.columns), dataset_name="strategy_state_changes")
             row = pd.concat([existing, row], ignore_index=True).tail(500)
         row.to_csv(path, index=False)
+
+    @staticmethod
+    def _empty_recommendation() -> FinalRecommendation:
+        return FinalRecommendation(
+            symbol="N/A",
+            timeframe="N/A",
+            action=SignalAction.NO_TRADE,
+            market_price=0.0,
+            entry=0.0,
+            stop_loss=0.0,
+            take_profit=0.0,
+            risk_reward=0.0,
+            confidence=0.0,
+            selected_strategy="none",
+            market_status="unknown",
+            news_status="unknown",
+            mt5_connection_status="unknown",
+            signal_strength="weak",
+            rejection_reason="",
+            volatility_state="unknown",
+            next_news_event=None,
+            reasons=[],
+            timestamp=datetime.utcnow(),
+        )

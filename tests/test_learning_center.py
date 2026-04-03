@@ -134,3 +134,10 @@ def test_safe_read_csv_returns_empty_schema_for_malformed_file(tmp_path) -> None
     frame = safe_read_csv(path, LEARNING_DATASET_SCHEMAS["candidates"], dataset_name="candidates")
     assert frame.empty
     assert list(frame.columns) == LEARNING_DATASET_SCHEMAS["candidates"]
+
+
+def test_load_learning_data_handles_malformed_metadata_json(tmp_path) -> None:
+    metadata_path = tmp_path / "learning_metadata.json"
+    metadata_path.write_text("{ broken", encoding="utf-8")
+    payload = load_learning_data(tmp_path)
+    assert payload["metadata"] == {}

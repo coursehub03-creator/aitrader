@@ -166,7 +166,15 @@ def load_learning_data(base_dir: str | Path = "logs/learning") -> dict[str, pd.D
 
     metadata_path = root / "learning_metadata.json"
     if metadata_path.exists():
-        datasets["metadata"] = json.loads(metadata_path.read_text(encoding="utf-8"))
+        try:
+            raw = metadata_path.read_text(encoding="utf-8").strip()
+            datasets["metadata"] = json.loads(raw) if raw else {}
+        except json.JSONDecodeError as exc:
+            LOGGER.warning("Learning metadata is malformed at %s: %s", metadata_path, exc)
+            datasets["metadata"] = {}
+        except Exception as exc:  # pragma: no cover - defensive fallback
+            LOGGER.warning("Learning metadata could not be loaded at %s: %s", metadata_path, exc)
+            datasets["metadata"] = {}
     else:
         datasets["metadata"] = {}
     return datasets
