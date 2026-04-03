@@ -712,18 +712,20 @@ class DashboardService:
                                 "strategy_name": row.get("strategy_name", ""),
                                 "symbol": row.get("symbol", ""),
                                 "timeframe": row.get("timeframe", ""),
-                                "strategy_state": "promoted",
+                                "strategy_state": "active",
                                 "historical_score": row.get("historical_score", 0),
                                 "recent_score": row.get("recent_score", 0),
+                                "combined_score": row.get("combined_score", 0),
                                 "learning_confidence": 0.7,
                                 "trade_count": row.get("sample_size", 0),
                                 "win_rate": 0,
                                 "expectancy": 0,
                                 "max_drawdown": 0,
                                 "last_promoted_time": now,
-                                "state_label": "promoted",
+                                "state_label": "active",
                                 "parameter_summary": row.get("parameter_summary", ""),
                                 "blocked_reason": "",
+                                "lifecycle_reason": row.get("lifecycle_reason", "Promotion criteria satisfied."),
                                 "sample_size": row.get("sample_size", 0),
                             }
                         ]
@@ -731,7 +733,15 @@ class DashboardService:
                 ],
                 ignore_index=True,
             )
-            self._append_state_change(now, row.get("strategy_name", ""), row.get("symbol", ""), "candidate", "promoted", "Eligibility threshold met.")
+            self._append_state_change(
+                now,
+                row.get("strategy_name", ""),
+                row.get("symbol", ""),
+                "candidate",
+                "active",
+                row.get("lifecycle_reason", "Eligibility threshold met."),
+                event_type="promotion",
+            )
             self._append_learning_event("promotion", row.get("strategy_name", ""), row.get("symbol", ""), "Candidate promoted to active.")
         active.drop_duplicates(subset=["strategy_name", "symbol", "timeframe"], keep="last", inplace=True)
         self.learning_dir.mkdir(parents=True, exist_ok=True)
@@ -797,6 +807,18 @@ class DashboardService:
         active_count = int(self.settings.get("learning.active_strategy_count", 2))
         active = table.head(active_count).copy()
         candidates = table.iloc[active_count:].copy()
+        prior = load_learning_data(self.learning_dir)
+        prior_states: dict[tuple[str, str, str], str] = {}
+        for source in (prior["active"], prior["candidates"]):
+            if source.empty:
+                continue
+            for _, prior_row in source.iterrows():
+                key = (
+                    str(prior_row.get("strategy_name", "")),
+                    str(prior_row.get("symbol", "")).upper(),
+                    str(prior_row.get("timeframe", "")).upper(),
+                )
+                prior_states[key] = str(prior_row.get("strategy_state", "candidate")).lower()
         leaderboard = self.strategy_leaderboard_by_symbol(min_trades=1)
 
         def _score_for(strategy: str) -> tuple[float, float, float, float, float]:
@@ -812,14 +834,18 @@ class DashboardService:
         for _, row in active.iterrows():
             trades, win_rate, expectancy, drawdown, recent_score = _score_for(str(row["strategy"]))
             weighted = self.unified_scorer.score(float(row["score"]), recent_score)
-            state_label = self.unified_scorer.lifecycle_state(
+            key = (str(row["strategy"]), symbol.upper(), timeframe.upper())
+            previous_state = prior_states.get(key, "candidate")
+            decision = self.unified_scorer.evaluate(
                 sample_size=int(trades),
                 recent_drawdown=float(drawdown),
                 expectancy=float(expectancy),
                 historical_score=float(row["score"]),
                 recent_score=float(recent_score),
-                previous_state="active",
+                previous_state=previous_state,
             )
+            state_label = decision.lifecycle_state
+            reason_text = " | ".join(decision.reasons)
             active_rows.append(
                 {
                     "strategy_name": row["strategy"],
@@ -834,27 +860,57 @@ class DashboardService:
                     "win_rate": win_rate,
                     "expectancy": expectancy,
                     "max_drawdown": drawdown,
-                    "last_promoted_time": now if state_label == "promoted" else "",
+                    "last_promoted_time": now if state_label == "active" and previous_state != "active" else "",
                     "state_label": state_label,
                     "parameter_summary": str(row["best_params"]),
                     "blocked_reason": "",
+                    "lifecycle_reason": reason_text,
                     "sample_size": int(trades),
                 }
             )
+            self.persistence.append_strategy_score_snapshot(
+                {
+                    "timestamp": now,
+                    "symbol": symbol.upper(),
+                    "timeframe": timeframe.upper(),
+                    "strategy_name": str(row["strategy"]),
+                    "historical_score": weighted.historical_score,
+                    "recent_score": weighted.recent_score,
+                    "combined_score": weighted.combined_score,
+                    "sample_size": int(trades),
+                    "expectancy": float(expectancy),
+                    "max_drawdown": float(drawdown),
+                    "lifecycle_state": state_label,
+                    "lifecycle_reason": reason_text,
+                }
+            )
+            if state_label != previous_state:
+                event_type = "demotion" if state_label in {"probation", "disabled"} and previous_state == "active" else "state_change"
+                self._append_state_change(
+                    now,
+                    str(row["strategy"]),
+                    symbol.upper(),
+                    previous_state,
+                    state_label,
+                    reason_text,
+                    event_type=event_type,
+                )
         candidate_rows: list[dict[str, Any]] = []
         for _, row in candidates.iterrows():
             trades, _win_rate, expectancy, drawdown, recent_score = _score_for(str(row["strategy"]))
             weighted = self.unified_scorer.score(float(row["score"]), recent_score)
-            blocked_reason = ""
-            eligibility = "eligible"
-            if not self.unified_scorer.promote_allowed(sample_size=int(trades), recent_drawdown=float(drawdown), expectancy=float(expectancy)):
-                eligibility = "blocked"
-            if trades < self.unified_scorer.min_sample_size:
-                blocked_reason = "Low sample size"
-            elif expectancy < 0:
-                blocked_reason = "Poor expectancy"
-            elif drawdown > self.unified_scorer.max_drawdown:
-                blocked_reason = "High drawdown"
+            key = (str(row["strategy"]), symbol.upper(), timeframe.upper())
+            previous_state = prior_states.get(key, "candidate")
+            decision = self.unified_scorer.evaluate(
+                sample_size=int(trades),
+                recent_drawdown=float(drawdown),
+                expectancy=float(expectancy),
+                historical_score=float(row["score"]),
+                recent_score=float(recent_score),
+                previous_state=previous_state,
+            )
+            blocked_reason = "" if decision.promotion_allowed else " | ".join(decision.reasons)
+            eligibility = "eligible" if decision.promotion_allowed else "blocked"
             candidate_rows.append(
                 {
                     "strategy_name": row["strategy"],
@@ -865,10 +921,39 @@ class DashboardService:
                     "recent_score": weighted.recent_score,
                     "combined_score": weighted.combined_score,
                     "promotion_eligibility": eligibility,
+                    "strategy_state": decision.lifecycle_state,
                     "sample_size": int(trades),
                     "blocked_reason": blocked_reason,
+                    "lifecycle_reason": blocked_reason or "Promotion criteria satisfied.",
                 }
             )
+            self.persistence.append_strategy_score_snapshot(
+                {
+                    "timestamp": now,
+                    "symbol": symbol.upper(),
+                    "timeframe": timeframe.upper(),
+                    "strategy_name": str(row["strategy"]),
+                    "historical_score": weighted.historical_score,
+                    "recent_score": weighted.recent_score,
+                    "combined_score": weighted.combined_score,
+                    "sample_size": int(trades),
+                    "expectancy": float(expectancy),
+                    "max_drawdown": float(drawdown),
+                    "lifecycle_state": decision.lifecycle_state,
+                    "lifecycle_reason": blocked_reason,
+                }
+            )
+            if decision.lifecycle_state != previous_state:
+                event_type = "demotion" if decision.lifecycle_state in {"probation", "disabled"} and previous_state == "active" else "state_change"
+                self._append_state_change(
+                    now,
+                    str(row["strategy"]),
+                    symbol.upper(),
+                    previous_state,
+                    decision.lifecycle_state,
+                    blocked_reason or "Lifecycle state updated.",
+                    event_type=event_type,
+                )
 
         pd.DataFrame(active_rows).to_csv(self.learning_dir / "active_strategies.csv", index=False)
         pd.DataFrame(candidate_rows).to_csv(self.learning_dir / "candidate_strategies.csv", index=False)
@@ -921,26 +1006,25 @@ class DashboardService:
         previous_state: str,
         new_state: str,
         reason: str,
+        event_type: str = "state_change",
     ) -> None:
         self.learning_dir.mkdir(parents=True, exist_ok=True)
-        row = pd.DataFrame(
-            [
-                {
-                    "timestamp": timestamp,
-                    "strategy": strategy,
-                    "symbol": symbol,
-                    "previous_state": previous_state,
-                    "new_state": new_state,
-                    "reason": reason,
-                    "event_type": "state_change",
-                }
-            ]
-        )
+        payload = {
+            "timestamp": timestamp,
+            "strategy": strategy,
+            "symbol": symbol,
+            "previous_state": previous_state,
+            "new_state": new_state,
+            "reason": reason,
+            "event_type": event_type,
+        }
+        row = pd.DataFrame([payload])
         path = self.learning_dir / "strategy_state_changes.csv"
         if path.exists():
             existing = self._safe_read_csv(path, list(row.columns), dataset_name="strategy_state_changes")
             row = pd.concat([existing, row], ignore_index=True).tail(500)
         row.to_csv(path, index=False)
+        self.persistence.append_strategy_state_change(payload)
 
     @staticmethod
     def _empty_recommendation() -> FinalRecommendation:

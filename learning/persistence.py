@@ -204,6 +204,9 @@ class LearningPersistence:
     def append_strategy_state_change(self, row: dict[str, Any]) -> None:
         self.upsert_table("strategy_state_changes", pd.DataFrame([row]), if_exists="append")
 
+    def append_strategy_score_snapshot(self, row: dict[str, Any]) -> None:
+        self.upsert_table("strategy_score_snapshots", pd.DataFrame([row]), if_exists="append")
+
     def append_lifecycle_event(
         self,
         *,

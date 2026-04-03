@@ -14,12 +14,11 @@ import pandas as pd
 LOGGER = logging.getLogger(__name__)
 
 STATE_BADGES = {
-    "promoted": "🟢 Promoted",
-    "stable": "🔵 Stable",
+    "active": "🟢 Active",
     "probation": "🟠 Probation",
-    "recently_degraded": "🔴 Recently Degraded",
     "candidate": "🟣 Candidate",
     "disabled": "⚫ Disabled",
+    "archived": "⚪ Archived",
 }
 
 LEARNING_DATASET_SCHEMAS: dict[str, list[str]] = {
@@ -40,6 +39,7 @@ LEARNING_DATASET_SCHEMAS: dict[str, list[str]] = {
         "state_label",
         "parameter_summary",
         "blocked_reason",
+        "lifecycle_reason",
         "sample_size",
     ],
     "candidates": [
@@ -51,8 +51,10 @@ LEARNING_DATASET_SCHEMAS: dict[str, list[str]] = {
         "recent_score",
         "combined_score",
         "promotion_eligibility",
+        "strategy_state",
         "sample_size",
         "blocked_reason",
+        "lifecycle_reason",
     ],
     "state_changes": ["timestamp", "strategy", "symbol", "previous_state", "new_state", "reason", "event_type"],
     "historical_validation": [
