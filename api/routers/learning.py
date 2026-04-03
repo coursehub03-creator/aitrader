@@ -5,7 +5,13 @@ from __future__ import annotations
 from fastapi import APIRouter, Depends
 
 from api.dependencies import get_dashboard_service
-from api.schemas import HistoricalFetchRequest, HistoricalFetchResponse, HistoryInventoryEnvelope
+from api.schemas import (
+    HistoricalFetchRequest,
+    HistoricalFetchResponse,
+    HistoricalValidationEnvelope,
+    HistoricalValidationRequest,
+    HistoryInventoryEnvelope,
+)
 from ui.dashboard_service import DashboardService
 
 router = APIRouter(prefix="/learning", tags=["learning"])
@@ -38,3 +44,25 @@ def history_inventory(
 ) -> HistoryInventoryEnvelope:
     frame = service.historical_data_summary()
     return HistoryInventoryEnvelope(rows=frame.to_dict(orient="records"))
+
+
+@router.post("/validation/run", response_model=HistoricalValidationEnvelope)
+def run_historical_validation(
+    request: HistoricalValidationRequest,
+    service: DashboardService = Depends(get_dashboard_service),
+) -> HistoricalValidationEnvelope:
+    if not request.run:
+        return HistoricalValidationEnvelope(rows=[])
+    frame = service.run_historical_validation()
+    return HistoricalValidationEnvelope(rows=frame.to_dict(orient="records"))
+
+
+@router.get("/validation/results", response_model=HistoricalValidationEnvelope)
+def historical_validation_results(
+    service: DashboardService = Depends(get_dashboard_service),
+) -> HistoricalValidationEnvelope:
+    payload = service.learning_center_payload()
+    frame = payload.get("historical_validation")
+    if isinstance(frame, dict):
+        return HistoricalValidationEnvelope(rows=[])
+    return HistoricalValidationEnvelope(rows=frame.to_dict(orient="records"))

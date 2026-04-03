@@ -36,3 +36,16 @@ export function fetchHistoricalData(symbol: string, timeframe: string, lookbackD
 export function fetchHistoryInventory() {
   return apiGet<HistoryInventoryPayload>("/learning/history/inventory");
 }
+
+
+export type HistoricalValidationPayload = {
+  rows: Array<Record<string, unknown>>;
+};
+
+export function runHistoricalValidation() {
+  return apiPost<HistoricalValidationPayload, { run: boolean }>("/learning/validation/run", { run: true });
+}
+
+export function fetchHistoricalValidationResults() {
+  return apiGet<HistoricalValidationPayload>("/learning/validation/results");
+}

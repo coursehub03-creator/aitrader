@@ -52,6 +52,27 @@ class FakeService:
             "status_message": "Fetched 42 candles successfully.",
         }
 
+
+    def run_historical_validation(self):
+        return pd.DataFrame(
+            [
+                {
+                    "symbol": "EURUSD",
+                    "timeframe": "M5",
+                    "strategy": "trend_rsi",
+                    "rank": 1,
+                    "total_trades": 25,
+                    "win_rate": 0.56,
+                    "loss_rate": 0.44,
+                    "net_pnl": 18.2,
+                    "max_drawdown": 2.3,
+                    "profit_factor": 1.42,
+                    "expectancy": 0.73,
+                    "score": 61.5,
+                }
+            ]
+        )
+
     def historical_data_summary(self):
         return pd.DataFrame(
             [
@@ -141,3 +162,20 @@ def test_learning_historical_inventory_endpoint(tmp_path) -> None:
     payload = response.json()
     assert len(payload["rows"]) == 1
     assert payload["rows"][0]["symbol"] == "EURUSD"
+
+
+def test_learning_validation_run_endpoint(tmp_path) -> None:
+    client = _client(tmp_path)
+    response = client.post('/learning/validation/run', json={'run': True})
+    assert response.status_code == 200
+    payload = response.json()
+    assert len(payload['rows']) == 1
+    assert payload['rows'][0]['strategy'] == 'trend_rsi'
+
+
+def test_learning_validation_results_endpoint(tmp_path) -> None:
+    client = _client(tmp_path)
+    response = client.get('/learning/validation/results')
+    assert response.status_code == 200
+    payload = response.json()
+    assert isinstance(payload['rows'], list)
