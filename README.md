@@ -251,6 +251,17 @@ streamlit run ui/app.py
 
 > Keep MetaTrader 5 open to enable live MT5 market access. If MT5 is closed or unavailable, the dashboard will safely show `mt5_unavailable` and continue running without crashing.
 
+### Known runtime entrypoints
+
+- **Streamlit operator dashboard**: `streamlit run ui/app.py`
+  - Primary local runtime for recommendation monitoring, watch mode, charting, alerts, and learning-center operations.
+- **CLI recommendation loop**: `python -m app.main --symbol EURUSD --timeframe M5`
+  - Lightweight local recommendation runner for non-UI operations and scripted checks.
+- **FastAPI service layer**: `uvicorn api.app:app --reload --port 8000`
+  - Migration-ready API surface for recommendations, watchlist, market candles, alerts, paper trades, and learning payloads.
+
+All entrypoints are designed to degrade gracefully when MT5, local CSV/JSON files, or learning artifacts are unavailable or empty.
+
 
 ### Run FastAPI service (new migration layer)
 

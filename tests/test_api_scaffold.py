@@ -85,3 +85,12 @@ def test_watchlist_crud_endpoints(tmp_path) -> None:
     remove_response = client.delete("/watchlist/NZDUSD")
     assert remove_response.status_code == 200
     assert "NZDUSD" not in remove_response.json()["symbols"]
+
+
+def test_watchlist_endpoint_handles_malformed_json(tmp_path) -> None:
+    watchlist_path = tmp_path / "watchlist.json"
+    watchlist_path.write_text("{ broken", encoding="utf-8")
+    client = _client(tmp_path)
+    response = client.get("/watchlist")
+    assert response.status_code == 200
+    assert response.json()["symbols"] == ["EURUSD", "GBPUSD", "USDJPY", "XAUUSD"]

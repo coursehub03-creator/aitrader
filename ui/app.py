@@ -216,7 +216,11 @@ def render_chart(service: DashboardService, symbol: str, timeframe: str, recomme
         st.info(payload["reason"])
         return
 
-    st.plotly_chart(build_market_figure(payload, controls), use_container_width=True, theme=None)
+    try:
+        st.plotly_chart(build_market_figure(payload, controls), use_container_width=True, theme=None)
+    except Exception as exc:  # pragma: no cover - defensive fallback for plot rendering
+        st.warning("Chart rendering fallback activated. Live chart is unavailable right now.")
+        st.caption(f"Details: {exc}")
 
 
 def render_recommendation_panel(recommendation: FinalRecommendation | None) -> None:
@@ -236,12 +240,10 @@ def render_recommendation_panel(recommendation: FinalRecommendation | None) -> N
 def render_history_panel(service: DashboardService) -> None:
     recent_disk = service.recent_recommendations(limit=80)
     recent = pd.DataFrame(st.session_state.recommendation_history)
-    merged = (
-        pd.concat([recent, recent_disk], ignore_index=True)
-        .drop_duplicates(subset=["timestamp", "symbol", "selected_strategy", "action"], keep="first")
-        if not recent.empty
-        else recent_disk
-    )
+    merged = pd.concat([recent, recent_disk], ignore_index=True) if not recent.empty else recent_disk
+    dedupe_cols = [col for col in ["timestamp", "symbol", "selected_strategy", "action"] if col in merged.columns]
+    if dedupe_cols:
+        merged = merged.drop_duplicates(subset=dedupe_cols, keep="first")
     st.dataframe(merged.head(120), use_container_width=True, hide_index=True, height=320)
 
 
@@ -263,9 +265,11 @@ def render_learning_health(payload: dict) -> None:
 
 
 def sidebar_controls() -> None:
+    symbol_value = st.session_state.selected_symbol if st.session_state.selected_symbol in COMMON_SYMBOLS else COMMON_SYMBOLS[0]
+    tf_value = st.session_state.selected_timeframe if st.session_state.selected_timeframe in TIMEFRAMES else TIMEFRAMES[1]
     st.sidebar.markdown("## Terminal Controls")
-    st.session_state.selected_symbol = st.sidebar.selectbox("Active Symbol", COMMON_SYMBOLS, index=max(0, COMMON_SYMBOLS.index(st.session_state.selected_symbol)))
-    st.session_state.selected_timeframe = st.sidebar.selectbox("Timeframe", TIMEFRAMES, index=max(0, TIMEFRAMES.index(st.session_state.selected_timeframe)))
+    st.session_state.selected_symbol = st.sidebar.selectbox("Active Symbol", COMMON_SYMBOLS, index=COMMON_SYMBOLS.index(symbol_value))
+    st.session_state.selected_timeframe = st.sidebar.selectbox("Timeframe", TIMEFRAMES, index=TIMEFRAMES.index(tf_value))
     st.session_state.compact_mode = st.sidebar.toggle("Compact mode", value=st.session_state.compact_mode)
     st.session_state.expanded_chart = st.sidebar.toggle("Expanded chart", value=st.session_state.expanded_chart)
     st.session_state.watch_mode = st.sidebar.toggle("Watch mode", value=st.session_state.watch_mode)

@@ -98,3 +98,50 @@ def test_alert_history_recording(tmp_path) -> None:
     assert frame.loc[0, "timeframe"] == "M5"
     assert frame.loc[0, "alert_type"] == "strong_trade_alert"
     assert bool(frame.loc[0, "suppressed"]) is True
+
+
+def test_recent_recommendations_handles_malformed_csv(tmp_path) -> None:
+    service = DashboardService.__new__(DashboardService)
+    service.recent_recommendations_path = tmp_path / "recent.csv"
+    service.recent_recommendations_path.write_text('\"broken\nx,y,z', encoding="utf-8")
+
+    frame = service.recent_recommendations(limit=10)
+    assert frame.empty
+    assert "symbol" in frame.columns
+    assert "action" in frame.columns
+
+
+def test_load_paper_trades_handles_empty_and_malformed_csv(tmp_path) -> None:
+    service = DashboardService.__new__(DashboardService)
+    service.trade_csv_path = tmp_path / "paper_trades.csv"
+    service._trade_columns = [
+        "strategy_name",
+        "symbol",
+        "side",
+        "entry",
+        "exit_price",
+        "stop_loss",
+        "take_profit",
+        "open_time",
+        "close_time",
+        "outcome",
+        "pnl",
+        "is_win",
+        "timeframe",
+        "strategy",
+        "result",
+        "signal_strength",
+        "market_conditions",
+        "news_status",
+        "spread_state",
+        "session_state",
+    ]
+
+    empty = service.load_paper_trades(limit=10)
+    assert empty.empty
+    assert list(empty.columns) == service._trade_columns
+
+    service.trade_csv_path.write_text('\"broken\nx,y,z', encoding="utf-8")
+    malformed = service.load_paper_trades(limit=10)
+    assert malformed.empty
+    assert list(malformed.columns) == service._trade_columns

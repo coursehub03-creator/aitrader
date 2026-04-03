@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+import logging
 
 from fastapi import APIRouter, HTTPException
 
@@ -11,14 +12,33 @@ from api.schemas import WatchlistEnvelope, WatchlistItem
 
 router = APIRouter(prefix="/watchlist", tags=["watchlist"])
 WATCHLIST_PATH = Path("state/watchlist.json")
+LOGGER = logging.getLogger(__name__)
+DEFAULT_SYMBOLS = ["EURUSD", "GBPUSD", "USDJPY", "XAUUSD"]
 
 
 def _load_watchlist() -> list[str]:
     if not WATCHLIST_PATH.exists():
-        return ["EURUSD", "GBPUSD", "USDJPY", "XAUUSD"]
-    data = json.loads(WATCHLIST_PATH.read_text(encoding="utf-8"))
+        return list(DEFAULT_SYMBOLS)
+    try:
+        raw = WATCHLIST_PATH.read_text(encoding="utf-8").strip()
+        if not raw:
+            LOGGER.warning("Watchlist file is empty at %s. Falling back to defaults.", WATCHLIST_PATH)
+            return list(DEFAULT_SYMBOLS)
+        data = json.loads(raw)
+    except json.JSONDecodeError as exc:
+        LOGGER.warning("Watchlist file is malformed at %s: %s. Falling back to defaults.", WATCHLIST_PATH, exc)
+        return list(DEFAULT_SYMBOLS)
+    except Exception as exc:
+        LOGGER.warning("Watchlist file could not be read at %s: %s. Falling back to defaults.", WATCHLIST_PATH, exc)
+        return list(DEFAULT_SYMBOLS)
+
     items = data.get("symbols", []) if isinstance(data, dict) else []
-    return [str(item).upper() for item in items]
+    cleaned: list[str] = []
+    for item in items:
+        symbol = str(item).upper().strip()
+        if symbol and symbol not in cleaned:
+            cleaned.append(symbol)
+    return cleaned or list(DEFAULT_SYMBOLS)
 
 
 def _save_watchlist(symbols: list[str]) -> None:
