@@ -54,8 +54,14 @@ class FakeMT5:
     ) -> list[dict[str, float | int]] | None:
         if symbol == "EMPTY":
             return None
+        if symbol == "STALE_EMPTY":
+            return []
+        if symbol == "STALE_BAD_STRUCT":
+            return [{"open": 1.1}]
+        if symbol == "STALE_BAD_TIME":
+            return [{"time": "bad"}]
 
-        base_time = int(time.time()) if symbol != "STALE" else 1_700_000_000
+        base_time = int(time.time()) if symbol not in {"STALE", "STALE_EMPTY", "STALE_BAD_STRUCT", "STALE_BAD_TIME"} else 1_700_000_000
         return [
             {
                 "time": base_time + i * 60,
@@ -70,7 +76,7 @@ class FakeMT5:
         ]
 
     def symbol_info_tick(self, symbol: str) -> SimpleNamespace | None:
-        if symbol == "STALE":
+        if symbol in {"STALE", "STALE_EMPTY", "STALE_BAD_STRUCT", "STALE_BAD_TIME"}:
             return SimpleNamespace(time=1_700_000_000)
         return SimpleNamespace(time=int(time.time()))
 
@@ -145,6 +151,9 @@ def test_detect_market_status_variants(monkeypatch) -> None:
 
     assert client.detect_market_status("EURUSD", "M5")[0] == "open"
     assert client.detect_market_status("STALE", "M5")[0] == "closed"
+    assert client.detect_market_status("STALE_EMPTY", "M5")[0] == "closed"
+    assert client.detect_market_status("STALE_BAD_STRUCT", "M5")[0] == "closed"
+    assert client.detect_market_status("STALE_BAD_TIME", "M5")[0] == "closed"
     assert client.detect_market_status("MISSING", "M5")[0] == "unavailable"
     assert client.detect_market_status("NOT_TRADABLE", "M5")[0] == "unavailable"
 

@@ -296,7 +296,39 @@ class MT5Client:
             self.status_message = f"No recent rates for {symbol}/{timeframe}; market likely closed"
             return "closed", self.status_message
 
-        latest_time = int(rates[-1]["time"]) if isinstance(rates[-1], dict) else int(rates[-1].time)
+        try:
+            df = pd.DataFrame(rates)
+        except Exception as exc:
+            self.status_message = (
+                f"Invalid rates payload for {symbol}/{timeframe}; "
+                f"market status fallback to closed: {exc}"
+            )
+            LOGGER.warning(self.status_message)
+            return "closed", self.status_message
+
+        if df.empty:
+            self.status_message = f"No recent rates for {symbol}/{timeframe}; market likely closed"
+            return "closed", self.status_message
+
+        if "time" not in df.columns:
+            self.status_message = (
+                f"MT5 rates missing time column for {symbol}/{timeframe}; "
+                "market status fallback to closed"
+            )
+            LOGGER.warning(self.status_message)
+            return "closed", self.status_message
+
+        df["time"] = pd.to_datetime(df["time"], unit="s", utc=True, errors="coerce")
+        latest_time_value = df.iloc[-1]["time"]
+        if pd.isna(latest_time_value):
+            self.status_message = (
+                f"MT5 rates contain invalid time values for {symbol}/{timeframe}; "
+                "market status fallback to closed"
+            )
+            LOGGER.warning(self.status_message)
+            return "closed", self.status_message
+
+        latest_time = int(latest_time_value.timestamp())
         if (now_ts - latest_time) <= stale_after:
             return "open", "Recent MT5 candles confirm market is open"
 
