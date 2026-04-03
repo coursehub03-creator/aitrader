@@ -39,15 +39,17 @@ class TrendRSIStrategy(BaseStrategy):
 
         last = data.iloc[-1]
         price = float(last["close"])
-        confidence = float(params["base_confidence"])
+        confidence = float(params.get("base_confidence", 0.62))
+        sl_pct = float(params.get("sl_pct", 0.003))
+        tp_pct = float(params.get("tp_pct", 0.006))
 
         if last["ema_fast"] > last["ema_slow"] and last["rsi"] >= params["rsi_buy_threshold"]:
             return StrategySignal(
                 self.name,
                 SignalAction.BUY,
                 price,
-                price * (1 - params["sl_pct"]),
-                price * (1 + params["tp_pct"]),
+                price * (1 - sl_pct),
+                price * (1 + tp_pct),
                 confidence,
                 ["EMA fast above EMA slow", "RSI confirms bullish momentum"],
             )
@@ -56,8 +58,8 @@ class TrendRSIStrategy(BaseStrategy):
                 self.name,
                 SignalAction.SELL,
                 price,
-                price * (1 + params["sl_pct"]),
-                price * (1 - params["tp_pct"]),
+                price * (1 + sl_pct),
+                price * (1 - tp_pct),
                 confidence,
                 ["EMA fast below EMA slow", "RSI confirms bearish momentum"],
             )

@@ -1,5 +1,7 @@
 from dataclasses import dataclass
+from datetime import datetime
 
+from core.types import SignalAction, StrategyScore, StrategySignal
 from learning.optimizer import OptimizationResult
 from recommendation.engine import RecommendationEngine
 
@@ -44,3 +46,44 @@ def test_active_strategy_names_falls_back_to_all_when_no_optimization() -> None:
     selected = engine._active_strategy_names({}, active_count=2, optimization_enabled=False)
 
     assert selected == {"trend_rsi", "breakout_atr"}
+
+
+def test_aggregate_excludes_very_weak_strategies() -> None:
+    engine = _engine()
+    engine.settings = {
+        "learning.weak_strategy_score_cutoff": 1.0,
+        "learning.weak_strategy_confidence_multiplier": 0.5,
+    }
+    timestamp = datetime.utcnow()
+    strong = StrategySignal("trend_rsi", SignalAction.BUY, 1.25, 1.24, 1.27, 0.8, ["trend aligned"])
+    weak = StrategySignal("breakout_atr", SignalAction.BUY, 1.26, 1.245, 1.275, 0.7, ["weak breakout"])
+
+    rec = engine._aggregate(
+        "EURUSD",
+        "M5",
+        [
+            (strong, StrategyScore("trend_rsi", 5.0, 0.0, 10, 1.0, 0.6, 0.4, 0.1, 1.2, 0.1)),
+            (weak, StrategyScore("breakout_atr", 0.0, -1.0, 10, 1.0, 0.3, 0.7, -0.1, 0.6, -0.1)),
+        ],
+        confidence_multiplier=1.0,
+        news_status="allow trading",
+        timestamp=timestamp,
+    )
+
+    assert rec.final_action == SignalAction.BUY
+    assert rec.strategy_name == "trend_rsi"
+    assert rec.news_status == "allow trading"
+    assert rec.timestamp == timestamp
+    assert any("excluded due to weak recent performance" in reason for reason in rec.reasons)
+
+
+def test_format_for_terminal_contains_core_fields() -> None:
+    engine = _engine()
+    rec = engine._no_trade("EURUSD", "M5", "High-impact news window", "block trading", datetime.utcnow())
+
+    formatted = engine.format_for_terminal(rec)
+
+    assert "Final Recommendation" in formatted
+    assert "Action:" in formatted
+    assert "News:" in formatted
+    assert "Reasons:" in formatted
