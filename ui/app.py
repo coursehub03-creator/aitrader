@@ -17,6 +17,7 @@ if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
 from core.types import FinalRecommendation, SignalAction
+from ui.charting import ChartControls, build_market_figure, prepare_chart_payload
 from ui.dashboard_service import DashboardService
 
 
@@ -548,6 +549,90 @@ def render_learning_center(service: DashboardService, symbol: str, timeframe: st
             st.dataframe(best_config, use_container_width=True, hide_index=True)
 
 
+@st.cache_data(ttl=40, show_spinner=False)
+def _load_chart_candles(symbol: str, timeframe: str, bars: int) -> tuple[pd.DataFrame, str]:
+    service = get_service()
+    return service.refresh_market_data(symbol, timeframe, bars=bars)
+
+
+@st.cache_data(ttl=120, show_spinner=False)
+def _load_chart_news(symbol: str) -> list[dict]:
+    service = get_service()
+    return service.recent_news_events(symbol)
+
+
+def render_market_visuals(service: DashboardService, symbol: str, timeframe: str, recommendation: FinalRecommendation | None) -> None:
+    st.markdown("## Market Visuals")
+    st.caption("Professional charting workspace for manual validation of recommendations and paper-trade context.")
+
+    c = st.columns(6)
+    candles = int(c[0].number_input("Candles", min_value=80, max_value=1200, value=260, step=20))
+    show_ema = c[1].toggle("EMAs", value=True)
+    show_breakout = c[2].toggle("Breakout", value=True)
+    show_paper = c[3].toggle("Paper Trades", value=True)
+    show_recommendation = c[4].toggle("Recommendation", value=True)
+    show_news = c[5].toggle("News Markers", value=True)
+
+    c2 = st.columns(4)
+    show_sessions = c2[0].toggle("Session Shading", value=False)
+    show_support_resistance = c2[1].toggle("S/R Levels", value=False)
+    show_volatility_zones = c2[2].toggle("Volatility Zones", value=False)
+    breakout_window = int(c2[3].slider("Breakout Window", min_value=10, max_value=80, value=20, step=2))
+
+    controls = ChartControls(
+        candles=candles,
+        show_ema_fast=show_ema,
+        show_ema_slow=show_ema,
+        show_breakout_levels=show_breakout,
+        show_paper_trades=show_paper,
+        show_recommendation=show_recommendation,
+        show_sessions=show_sessions,
+        show_news=show_news,
+        show_support_resistance=show_support_resistance,
+        show_volatility_zones=show_volatility_zones,
+        breakout_window=breakout_window,
+    )
+
+    candles_frame, market_msg = _load_chart_candles(symbol, timeframe, candles)
+    if candles_frame.empty:
+        st.warning("No MT5 data available. Keep MT5 open and use Refresh Market Data in the sidebar.")
+        st.caption(f"Details: {market_msg}")
+        return
+
+    paper = service.load_paper_trades(limit=400)
+    if not paper.empty:
+        paper = paper[(paper["symbol"].astype(str) == symbol) & (paper["timeframe"].astype(str).str.upper() == timeframe.upper())]
+    news_events = _load_chart_news(symbol) if show_news else []
+    payload = prepare_chart_payload(candles_frame, controls, recommendation=recommendation, paper_trades=paper, news_events=news_events)
+    if payload["status"] != "ok":
+        st.info(payload["reason"])
+        return
+
+    try:
+        fig = build_market_figure(payload, controls)
+        st.plotly_chart(fig, use_container_width=True, theme=None)
+    except RuntimeError as exc:
+        st.error(str(exc))
+        return
+
+    context = payload["context"]
+    st.markdown("### Visual Trade Context")
+    m = st.columns(7)
+    m[0].metric("Market Price", f"{float(context.get('market_price', 0.0)):.5f}")
+    m[1].metric("Entry Zone", context.get("entry_zone", "n/a"))
+    m[2].metric("SL Distance", context.get("stop_loss_distance", "n/a"))
+    m[3].metric("TP Distance", context.get("take_profit_distance", "n/a"))
+    m[4].metric("Risk / Reward", context.get("risk_reward", "n/a"))
+    m[5].metric("Signal Strength", str(context.get("signal_strength", "n/a")).upper())
+    m[6].metric("Strategy", context.get("selected_strategy", "n/a"))
+    note = context.get("note", "")
+    if note:
+        st.info(note)
+
+    if paper.empty:
+        st.caption("No paper trades for this symbol/timeframe yet. Run paper trade simulation to visualize entries/exits.")
+
+
 def sidebar_controls(service: DashboardService) -> tuple[str, str, bool, int, bool, bool]:
     st.sidebar.header("Controls")
 
@@ -646,7 +731,7 @@ def main() -> None:
             st.session_state.current_recommendation_triggered_alert = False
 
     rec: FinalRecommendation = st.session_state.last_recommendation
-    page_tabs = st.tabs(["Trading Cockpit", "Self-Learning Center"])
+    page_tabs = st.tabs(["Trading Cockpit", "Market Visuals", "Self-Learning Center"])
     with page_tabs[0]:
         render_status_cards(connection_text, rec)
         st.caption(
@@ -716,6 +801,9 @@ def main() -> None:
             render_debug_panel()
 
     with page_tabs[1]:
+        render_market_visuals(service, symbol, timeframe, rec)
+
+    with page_tabs[2]:
         render_learning_center(service, symbol, timeframe)
 
     if auto_refresh:

@@ -5,10 +5,12 @@ from datetime import datetime, timezone
 import pandas as pd
 
 from ui.learning_center import (
+    LEARNING_DATASET_SCHEMAS,
     compute_learning_health_summary,
     extract_best_configuration_per_symbol,
     load_learning_data,
     prepare_state_changes,
+    safe_read_csv,
 )
 
 
@@ -110,3 +112,25 @@ def test_health_summary_with_zero_trades_and_zero_active_strategies() -> None:
     assert health.active_strategies == 0
     assert health.open_paper_trades == 0
     assert health.completed_paper_trades == 0
+
+
+def test_safe_read_csv_returns_empty_schema_for_missing_file(tmp_path) -> None:
+    frame = safe_read_csv(tmp_path / "missing.csv", LEARNING_DATASET_SCHEMAS["candidates"], dataset_name="candidates")
+    assert frame.empty
+    assert list(frame.columns) == LEARNING_DATASET_SCHEMAS["candidates"]
+
+
+def test_safe_read_csv_returns_empty_schema_for_empty_file(tmp_path) -> None:
+    path = tmp_path / "candidate_strategies.csv"
+    path.write_text("", encoding="utf-8")
+    frame = safe_read_csv(path, LEARNING_DATASET_SCHEMAS["candidates"], dataset_name="candidates")
+    assert frame.empty
+    assert list(frame.columns) == LEARNING_DATASET_SCHEMAS["candidates"]
+
+
+def test_safe_read_csv_returns_empty_schema_for_malformed_file(tmp_path) -> None:
+    path = tmp_path / "candidate_strategies.csv"
+    path.write_text('\"broken\nx,y,z', encoding="utf-8")
+    frame = safe_read_csv(path, LEARNING_DATASET_SCHEMAS["candidates"], dataset_name="candidates")
+    assert frame.empty
+    assert list(frame.columns) == LEARNING_DATASET_SCHEMAS["candidates"]

@@ -56,6 +56,7 @@ The project includes a premium local dashboard for manual decision support:
 - Debug/log panel for operator troubleshooting
 - Optional watch mode for auto-monitoring + alert status visibility
 - Self-Learning Center with operator controls, state transparency, and event logs
+- Market Visuals tab with interactive professional charting (candles, overlays, sessions, news, and trade markers)
 
 ### Self-Learning Center (Learning Control Center)
 
@@ -95,6 +96,40 @@ Learning Center reads/writes local-first persistence in `logs/learning/`:
 - `learning_metadata.json`
 
 If files are not present yet, the UI shows clean placeholders (for example: _No learning data yet_ and _Run optimizer or paper trading to populate this section_).
+Learning CSV loading is now crash-safe for missing, empty, or malformed files (schema-correct empty DataFrames are returned with warning logs), so the dashboard keeps running even when data has not been populated yet.
+
+### Market Visuals (Premium Charting Workstation)
+
+The dashboard includes a dedicated **Market Visuals** tab designed for manual operator analysis.
+
+#### What it shows
+
+- Interactive candlestick chart with pan/zoom
+- Fast/slow EMA overlays
+- RSI and ATR sub-panels
+- Optional breakout high/low overlays
+- Optional support/resistance overlays
+- Optional high-volatility zone highlighting
+- Recommendation markers (`BUY`/`SELL`/`NO_TRADE`) with SL/TP visual levels
+- Optional paper-trade entry/exit markers (win/loss aware colors)
+- Optional session shading (Asian / London / New York)
+- Optional news event markers (high/medium impact) with tooltips
+- Visual Trade Context panel (market price, entry zone, SL/TP distances, risk/reward, signal strength, strategy)
+
+#### Chart controls
+
+- Number of candles to display
+- Toggle EMAs
+- Toggle breakout overlays
+- Toggle recommendation markers
+- Toggle paper-trade markers
+- Toggle news markers
+- Toggle session shading
+- Toggle support/resistance overlays
+- Toggle volatility zones
+- Adjustable breakout window
+
+The chart layer reuses existing backend data sources (`MT5` candles, recommendation payload, local paper-trade logs, and news provider abstraction) and avoids duplicating decision logic in the UI.
 
 #### State meanings
 

@@ -5,11 +5,13 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 import json
+import logging
 from pathlib import Path
 from typing import Any
 
 import pandas as pd
 
+LOGGER = logging.getLogger(__name__)
 
 STATE_BADGES = {
     "promoted": "🟢 Promoted",
@@ -18,6 +20,83 @@ STATE_BADGES = {
     "recently_degraded": "🔴 Recently Degraded",
     "candidate": "🟣 Candidate",
     "disabled": "⚫ Disabled",
+}
+
+LEARNING_DATASET_SCHEMAS: dict[str, list[str]] = {
+    "active": [
+        "strategy_name",
+        "symbol",
+        "timeframe",
+        "strategy_state",
+        "historical_score",
+        "recent_score",
+        "learning_confidence",
+        "trade_count",
+        "win_rate",
+        "expectancy",
+        "max_drawdown",
+        "last_promoted_time",
+        "state_label",
+        "parameter_summary",
+        "blocked_reason",
+        "sample_size",
+    ],
+    "candidates": [
+        "strategy_name",
+        "symbol",
+        "timeframe",
+        "parameter_summary",
+        "historical_score",
+        "recent_score",
+        "promotion_eligibility",
+        "sample_size",
+        "blocked_reason",
+    ],
+    "state_changes": ["timestamp", "strategy", "symbol", "previous_state", "new_state", "reason", "event_type"],
+    "historical_validation": [
+        "timestamp",
+        "strategy",
+        "symbol",
+        "total_trades",
+        "net_pnl",
+        "win_rate",
+        "drawdown",
+        "profit_factor",
+        "expectancy",
+        "score",
+    ],
+    "paper_trades": [
+        "strategy_name",
+        "symbol",
+        "side",
+        "entry",
+        "exit_price",
+        "stop_loss",
+        "take_profit",
+        "open_time",
+        "close_time",
+        "outcome",
+        "pnl",
+        "is_win",
+        "timeframe",
+        "strategy",
+        "result",
+        "signal_strength",
+        "market_conditions",
+        "news_status",
+        "spread_state",
+        "session_state",
+    ],
+    "events": ["timestamp", "event_type", "strategy", "symbol", "message"],
+    "best_config": [
+        "symbol",
+        "strategy_name",
+        "parameter_summary",
+        "historical_score",
+        "recent_score",
+        "current_state",
+        "last_updated",
+    ],
 }
 
 
@@ -51,10 +130,19 @@ def _safe_timestamp(value: Any) -> datetime | None:
         return None
 
 
-def safe_read_csv(path: Path, columns: list[str]) -> pd.DataFrame:
-    if not path.exists():
+def safe_read_csv(path: Path, columns: list[str], dataset_name: str = "dataset") -> pd.DataFrame:
+    try:
+        frame = pd.read_csv(path)
+    except (FileNotFoundError, pd.errors.EmptyDataError) as exc:
+        LOGGER.warning("Learning dataset '%s' is missing/empty at %s: %s", dataset_name, path, exc)
         return pd.DataFrame(columns=columns)
-    frame = pd.read_csv(path)
+    except pd.errors.ParserError as exc:
+        LOGGER.warning("Learning dataset '%s' is malformed at %s: %s", dataset_name, path, exc)
+        return pd.DataFrame(columns=columns)
+    except Exception as exc:  # pragma: no cover - defensive fallback
+        LOGGER.warning("Learning dataset '%s' could not be loaded from %s: %s", dataset_name, path, exc)
+        return pd.DataFrame(columns=columns)
+
     for column in columns:
         if column not in frame.columns:
             frame[column] = ""
@@ -64,76 +152,13 @@ def safe_read_csv(path: Path, columns: list[str]) -> pd.DataFrame:
 def load_learning_data(base_dir: str | Path = "logs/learning") -> dict[str, pd.DataFrame | dict[str, Any]]:
     root = Path(base_dir)
     datasets: dict[str, pd.DataFrame | dict[str, Any]] = {
-        "active": safe_read_csv(
-            root / "active_strategies.csv",
-            [
-                "strategy_name",
-                "symbol",
-                "timeframe",
-                "strategy_state",
-                "historical_score",
-                "recent_score",
-                "learning_confidence",
-                "trade_count",
-                "win_rate",
-                "expectancy",
-                "max_drawdown",
-                "last_promoted_time",
-                "state_label",
-                "parameter_summary",
-                "blocked_reason",
-                "sample_size",
-            ],
-        ),
-        "candidates": safe_read_csv(
-            root / "candidate_strategies.csv",
-            [
-                "strategy_name",
-                "symbol",
-                "timeframe",
-                "parameter_summary",
-                "historical_score",
-                "recent_score",
-                "promotion_eligibility",
-                "sample_size",
-                "blocked_reason",
-            ],
-        ),
-        "state_changes": safe_read_csv(
-            root / "strategy_state_changes.csv",
-            ["timestamp", "strategy", "symbol", "previous_state", "new_state", "reason", "event_type"],
-        ),
-        "historical_validation": safe_read_csv(
-            root / "historical_validation.csv",
-            [
-                "timestamp",
-                "strategy",
-                "symbol",
-                "total_trades",
-                "net_pnl",
-                "win_rate",
-                "drawdown",
-                "profit_factor",
-                "expectancy",
-                "score",
-            ],
-        ),
-        "events": safe_read_csv(
-            root / "learning_events.csv",
-            ["timestamp", "event_type", "strategy", "symbol", "message"],
-        ),
-        "best_config": safe_read_csv(
-            root / "best_configurations.csv",
-            [
-                "symbol",
-                "strategy_name",
-                "parameter_summary",
-                "historical_score",
-                "recent_score",
-                "current_state",
-                "last_updated",
-            ],
-        ),
+        "active": safe_read_csv(root / "active_strategies.csv", LEARNING_DATASET_SCHEMAS["active"], dataset_name="active_strategies"),
+        "candidates": safe_read_csv(root / "candidate_strategies.csv", LEARNING_DATASET_SCHEMAS["candidates"], dataset_name="candidate_strategies"),
+        "state_changes": safe_read_csv(root / "strategy_state_changes.csv", LEARNING_DATASET_SCHEMAS["state_changes"], dataset_name="strategy_state_changes"),
+        "historical_validation": safe_read_csv(root / "historical_validation.csv", LEARNING_DATASET_SCHEMAS["historical_validation"], dataset_name="historical_validation"),
+        "events": safe_read_csv(root / "learning_events.csv", LEARNING_DATASET_SCHEMAS["events"], dataset_name="learning_events"),
+        "best_config": safe_read_csv(root / "best_configurations.csv", LEARNING_DATASET_SCHEMAS["best_config"], dataset_name="best_configurations"),
+        "paper_trades": pd.DataFrame(columns=LEARNING_DATASET_SCHEMAS["paper_trades"]),
     }
 
     metadata_path = root / "learning_metadata.json"
