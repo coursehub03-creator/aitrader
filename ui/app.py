@@ -158,8 +158,12 @@ def render_recommendation_summary(recommendation: FinalRecommendation) -> None:
         st.warning("⚠️ Low confidence: below minimum quality threshold (0.60).")
     if recommendation.volatility_state in {"low", "high"}:
         st.warning(f"⚠️ Volatility risk detected: {recommendation.volatility_state.upper()}.")
-    if recommendation.next_news_event:
-        evt = recommendation.next_news_event
+    if recommendation.spread_state == "excessive":
+        st.error("📏 Spread is excessive for this symbol profile. Trade blocked.")
+    elif recommendation.spread_state == "elevated":
+        st.warning("📏 Spread is elevated. Confidence may be reduced.")
+    if recommendation.next_relevant_news_event:
+        evt = recommendation.next_relevant_news_event
         mins = evt.get("minutes_to_event", "n/a")
         st.info(f"🗞️ Next news event in {mins} min: {evt.get('title', 'n/a')} ({evt.get('currency', 'n/a')}, {evt.get('impact', 'n/a')})")
 
@@ -180,6 +184,9 @@ def render_recommendation_summary(recommendation: FinalRecommendation) -> None:
     c4.metric("Confidence", f"{recommendation.confidence:.2%}")
     st.metric("Risk / Reward", f"{recommendation.risk_reward:.2f}")
     st.metric("Signal Strength", recommendation.signal_strength.upper())
+    st.metric("Session State", recommendation.session_state)
+    st.metric("Spread", f"{recommendation.spread_value:.2f} ({recommendation.spread_state})")
+    st.metric("Symbol Profile", recommendation.symbol_profile)
     if recommendation.action == SignalAction.NO_TRADE and recommendation.rejection_reason:
         st.error(f"Rejected trade: {recommendation.rejection_reason}")
 
@@ -194,6 +201,10 @@ def render_recommendation_detail_table(recommendation: FinalRecommendation) -> N
         ("market_status", recommendation.market_status),
         ("mt5_connection_status", recommendation.mt5_connection_status),
         ("news_status", recommendation.news_status),
+        ("symbol_profile", recommendation.symbol_profile),
+        ("session_state", recommendation.session_state),
+        ("spread_state", recommendation.spread_state),
+        ("spread_value", recommendation.spread_value),
         ("selected_strategy", recommendation.selected_strategy),
         ("action", action),
         ("entry", f"{recommendation.entry:.5f}"),
@@ -204,7 +215,8 @@ def render_recommendation_detail_table(recommendation: FinalRecommendation) -> N
         ("signal_strength", recommendation.signal_strength),
         ("rejection_reason", recommendation.rejection_reason or ""),
         ("volatility_state", recommendation.volatility_state),
-        ("next_news_event", recommendation.next_news_event or {}),
+        ("next_relevant_news_event", recommendation.next_relevant_news_event or {}),
+        ("next_relevant_news_countdown", recommendation.next_relevant_news_countdown or ""),
         ("reasons", " | ".join(recommendation.reasons)),
     ]
     st.dataframe(pd.DataFrame(rows, columns=["field", "value"]), use_container_width=True, hide_index=True)
@@ -277,12 +289,13 @@ def render_paper_trading_panel(service: DashboardService) -> None:
 
 
 def render_leaderboard(service: DashboardService) -> None:
-    st.markdown("### Leaderboard / Best Strategies")
-    board = service.strategy_leaderboard(min_trades=1)
+    st.markdown("### Leaderboard / Best Strategies (Per Symbol)")
+    board = service.strategy_leaderboard_by_symbol(min_trades=1)
     if board.empty:
         st.info("Leaderboard is empty. Generate paper trades to score strategies.")
         return
-    st.dataframe(board, use_container_width=True, hide_index=True)
+    keep = ["symbol", "strategy_name", "trades", "win_rate", "max_drawdown", "expectancy", "score"]
+    st.dataframe(board[keep], use_container_width=True, hide_index=True)
 
 
 def render_debug_panel() -> None:

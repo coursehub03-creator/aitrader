@@ -14,6 +14,7 @@ def currencies_for_symbol(symbol: str, symbols_map: dict[str, list[str]]) -> lis
         "GBPUSD": ["GBP", "USD"],
         "USDJPY": ["USD", "JPY"],
         "XAUUSD": ["USD", "MACRO"],
+        "GBPJPY": ["GBP", "JPY"],
     }
     if normalized_symbol in defaults:
         return defaults[normalized_symbol]
