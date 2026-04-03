@@ -15,9 +15,12 @@ A production-ready Python project for **AI-assisted trading recommendations** us
 - News provider abstraction (swappable providers)
 - ForexFactory-compatible provider implementation
 - High-impact news cooldown filter (blocks recommendations around key events)
+- Strategy layer with a base strategy contract (`BaseStrategy`)
+- Strategy registry/factory for pluggable strategy loading
 - Two starter strategies:
   - Trend + RSI
   - Breakout + ATR
+- Normalized strategy signals (`BUY` / `SELL` / `NO_TRADE`) with entry/SL/TP/confidence/reasons
 - Paper trade simulator
 - Strategy evaluator and score ranking
 - Grid-search parameter optimizer

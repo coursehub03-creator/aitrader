@@ -14,8 +14,7 @@ from logs.logger import configure_logging
 from news.filter import NewsFilter
 from news.providers import build_news_provider
 from recommendation.engine import RecommendationEngine
-from strategy.breakout_atr import BreakoutATRStrategy
-from strategy.trend_rsi import TrendRSIStrategy
+from strategy.registry import create_default_strategies
 
 LOGGER = logging.getLogger(__name__)
 
@@ -45,7 +44,7 @@ def main() -> None:
             before_minutes=int(settings.get("news.high_impact_cooldown_before_min", 30)),
             after_minutes=int(settings.get("news.high_impact_cooldown_after_min", 30)),
         ),
-        strategies=[TrendRSIStrategy(), BreakoutATRStrategy()],
+        strategies=create_default_strategies(),
         settings=settings,
         optimizer=ParameterOptimizer(
             lookahead_bars=int(settings.get("learning.lookahead_bars", 8)),
