@@ -65,25 +65,31 @@ def test_aggregate_excludes_very_weak_strategies() -> None:
             (strong, StrategyScore("trend_rsi", 5.0, 0.0, 10, 1.0, 0.6, 0.4, 0.1, 1.2, 0.1)),
             (weak, StrategyScore("breakout_atr", 0.0, -1.0, 10, 1.0, 0.3, 0.7, -0.1, 0.6, -0.1)),
         ],
+        market_price=1.251,
         confidence_multiplier=1.0,
-        news_status="allow trading",
+        news_status="clear",
         timestamp=timestamp,
     )
 
     assert rec.final_action == SignalAction.BUY
     assert rec.strategy_name == "trend_rsi"
-    assert rec.news_status == "allow trading"
+    assert rec.selected_strategy_name == "trend_rsi"
+    assert rec.news_status == "clear"
+    assert rec.market_price == 1.251
     assert rec.timestamp == timestamp
+    assert rec.risk_reward_ratio > 0
     assert any("excluded due to weak recent performance" in reason for reason in rec.reasons)
 
 
 def test_format_for_terminal_contains_core_fields() -> None:
     engine = _engine()
-    rec = engine._no_trade("EURUSD", "M5", "High-impact news window", "block trading", datetime.utcnow())
+    rec = engine._no_trade("EURUSD", "M5", "High-impact news window", "blocked", datetime.utcnow(), 1.1)
 
     formatted = engine.format_for_terminal(rec)
 
-    assert "Final Recommendation" in formatted
-    assert "Action:" in formatted
-    assert "News:" in formatted
-    assert "Reasons:" in formatted
+    assert "FINAL RECOMMENDATION" in formatted
+    assert "Action            :" in formatted
+    assert "News Status" in formatted
+    assert "REASONS" in formatted
+    assert "Market Price" in formatted
+    assert "Selected Strategy" in formatted
