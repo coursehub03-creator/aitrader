@@ -76,6 +76,9 @@ def ensure_state() -> None:
         "optimizer_table": pd.DataFrame(),
         "simulated_trades": pd.DataFrame(),
         "recommendation_history": [],
+        "latest_alert_status": "n/a",
+        "latest_alert_reason": "",
+        "monitoring_state": "idle",
     }
     for key, value in defaults.items():
         if key not in st.session_state:
@@ -124,11 +127,12 @@ def render_status_cards(connection_status: str, recommendation: FinalRecommendat
     market_status = recommendation.market_status if recommendation else "n/a"
     news_status = recommendation.news_status if recommendation else "n/a"
     refresh_text = st.session_state.last_refresh_label
-    cards = st.columns(4)
+    cards = st.columns(5)
     cards[0].metric("MT5 Connection", mt5_status)
     cards[1].metric("Market Status", market_status)
     cards[2].metric("News Status", news_status)
     cards[3].metric("Last Refresh", refresh_text)
+    cards[4].metric("Alert Status", st.session_state.latest_alert_status)
 
 
 def render_recommendation_summary(recommendation: FinalRecommendation) -> None:
@@ -293,7 +297,7 @@ def render_placeholder() -> None:
         st.caption("Once generated, action, risk levels, confidence, reasons, and status details will appear here.")
 
 
-def sidebar_controls(service: DashboardService) -> tuple[str, str, bool, int, bool]:
+def sidebar_controls(service: DashboardService) -> tuple[str, str, bool, int, bool, bool]:
     st.sidebar.header("Controls")
 
     symbol = st.sidebar.selectbox("Symbol", COMMON_SYMBOLS, index=0)
@@ -307,6 +311,7 @@ def sidebar_controls(service: DashboardService) -> tuple[str, str, bool, int, bo
 
     get_recommendation = st.sidebar.button("Get Recommendation", type="primary", use_container_width=True)
     auto_refresh = st.sidebar.toggle("Auto Refresh", value=False)
+    watch_mode = st.sidebar.toggle("Watch Mode (Alerts)", value=False)
     interval = int(st.sidebar.number_input("Refresh interval (seconds)", min_value=5, max_value=3600, value=300, step=5))
 
     if st.sidebar.button("Run Optimizer", use_container_width=True):
@@ -339,20 +344,21 @@ def sidebar_controls(service: DashboardService) -> tuple[str, str, bool, int, bo
             st.success("Settings reloaded")
             log_debug("Settings reloaded")
 
-    return symbol, timeframe, get_recommendation, interval, auto_refresh
+    return symbol, timeframe, get_recommendation, interval, auto_refresh, watch_mode
 
 
 def main() -> None:
     ensure_state()
     service = get_service()
 
-    symbol, timeframe, do_run, interval, auto_refresh = sidebar_controls(service)
+    symbol, timeframe, do_run, interval, auto_refresh, watch_mode = sidebar_controls(service)
 
     status, reason = service.connection_status(symbol, timeframe)
     connection_text = "connected" if status != "mt5_unavailable" else "unavailable"
     render_header()
 
     should_run_cycle = bool(do_run or auto_refresh)
+    st.session_state.monitoring_state = "running" if should_run_cycle and watch_mode else "idle"
     if should_run_cycle:
         recommendation = service.generate_recommendation(symbol, timeframe)
         recommendation = normalize_recommendation(recommendation)
@@ -374,9 +380,21 @@ def main() -> None:
         )
         st.session_state.recommendation_history = history[-100:]
         log_debug(f"Recommendation generated for {symbol}/{timeframe}: action={recommendation.action}")
+        if watch_mode:
+            alert_status, alert_reason = service.evaluate_and_send_alert(recommendation)
+            service.persist_alert_event(recommendation, alert_status, alert_reason)
+            st.session_state.latest_alert_status = alert_status
+            st.session_state.latest_alert_reason = alert_reason
+        else:
+            st.session_state.latest_alert_status = "not_evaluated"
+            st.session_state.latest_alert_reason = "watch mode disabled"
 
     rec: FinalRecommendation = st.session_state.last_recommendation
     render_status_cards(connection_text, rec)
+    st.caption(
+        f"Monitoring state: **{st.session_state.monitoring_state}** | "
+        f"Latest alert reason: `{st.session_state.latest_alert_reason or 'n/a'}`"
+    )
     st.markdown("---")
     if (rec and rec.market_status == "mt5_unavailable") or (rec is None and status == "mt5_unavailable"):
         st.error(
@@ -432,10 +450,16 @@ def main() -> None:
 
     with col_leader:
         render_leaderboard(service)
+        alerts = service.recent_alert_events(limit=25)
+        st.markdown("### Alert History")
+        if alerts.empty:
+            st.info("No alert events yet.")
+        else:
+            st.dataframe(alerts, use_container_width=True, hide_index=True, height=220)
         render_debug_panel()
 
     if auto_refresh:
-        st.caption(f"Auto refresh enabled. Next refresh in {interval} seconds.")
+        st.caption(f"Auto refresh enabled. Next refresh in {interval} seconds. Watch mode: {watch_mode}.")
         st.markdown(f"<meta http-equiv='refresh' content='{interval}'>", unsafe_allow_html=True)
 
 

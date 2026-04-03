@@ -71,3 +71,13 @@ recommendation:
     extreme_high_atr_pct: 0.0075
     low_vol_confidence_multiplier: 0.7
     high_vol_confidence_multiplier: 0.85
+
+monitoring:
+  interval_seconds: 300
+  alert_cooldown_seconds: 900
+  symbols: [EURUSD, GBPUSD, USDJPY]
+  telegram:
+    enabled: false
+    bot_token: ""
+    chat_id: ""
+    timeout_seconds: 10

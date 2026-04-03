@@ -16,6 +16,8 @@ from core.mt5_client import MT5Client
 from core.paper_trading import PaperTrader, TradeStore
 from core.types import FinalRecommendation, PaperTradeResult, SignalAction
 from learning.evaluator import PerformanceEvaluator
+from monitoring.alerts import AlertPolicy, AlertCooldownStore
+from notification.telegram_notifier import TelegramConfig, TelegramNotifier
 from strategy.registry import create_default_strategies
 
 
@@ -29,12 +31,46 @@ class DashboardService:
         self.paper_trader = PaperTrader()
         self.trade_store = TradeStore()
         self.recent_recommendations_path = Path("logs/ui_recent_recommendations.csv")
+        self.alert_history_path = Path("logs/ui_alert_history.csv")
+        self.alert_state_path = Path("logs/ui_alert_state.json")
         self.trade_csv_path = Path("logs/paper_trades.csv")
         self.trade_sqlite_path = Path("logs/paper_trades.sqlite3")
 
     def refresh_settings(self) -> None:
         self.settings = load_settings(self.settings_path)
         self.engine = build_engine(self.settings)
+
+    def evaluate_and_send_alert(self, recommendation: FinalRecommendation) -> tuple[str, str]:
+        policy = AlertPolicy(
+            min_confidence=float(self.settings.get("recommendation.min_confidence", 0.6)),
+            min_risk_reward=float(self.settings.get("recommendation.min_risk_reward", 1.5)),
+        )
+        qualifies, qualify_reason = policy.qualifies(recommendation)
+        if not qualifies:
+            return "suppressed", qualify_reason
+
+        cooldown = AlertCooldownStore(
+            self.alert_state_path,
+            cooldown_seconds=int(self.settings.get("monitoring.alert_cooldown_seconds", 900)),
+        )
+        key = cooldown.build_key(recommendation)
+        can_send, cooldown_reason = cooldown.can_send(key, datetime.now(tz=timezone.utc))
+        if not can_send:
+            return "suppressed", cooldown_reason
+
+        notifier = TelegramNotifier(
+            TelegramConfig(
+                enabled=bool(self.settings.get("monitoring.telegram.enabled", False)),
+                bot_token=str(self.settings.get("monitoring.telegram.bot_token", "")),
+                chat_id=str(self.settings.get("monitoring.telegram.chat_id", "")),
+                timeout_seconds=float(self.settings.get("monitoring.telegram.timeout_seconds", 10)),
+            )
+        )
+        sent, send_reason = notifier.send_recommendation_alert(recommendation)
+        if sent:
+            cooldown.mark_sent(key, datetime.now(tz=timezone.utc))
+            return "sent", send_reason
+        return "failed", send_reason
 
     @staticmethod
     def recommendation_to_record(recommendation: FinalRecommendation) -> dict[str, Any]:
@@ -110,6 +146,35 @@ class DashboardService:
 
         combined = combined.tail(500)
         combined.to_csv(self.recent_recommendations_path, index=False)
+
+    def persist_alert_event(self, recommendation: FinalRecommendation, status: str, reason: str) -> None:
+        row = pd.DataFrame(
+            [
+                {
+                    "timestamp": datetime.now(tz=timezone.utc).isoformat(timespec="seconds"),
+                    "symbol": recommendation.symbol,
+                    "action": recommendation.action.value if hasattr(recommendation.action, "value") else recommendation.action,
+                    "signal_strength": recommendation.signal_strength,
+                    "confidence": recommendation.confidence,
+                    "risk_reward": recommendation.risk_reward,
+                    "status": status,
+                    "reason": reason,
+                }
+            ]
+        )
+        self.alert_history_path.parent.mkdir(parents=True, exist_ok=True)
+        if self.alert_history_path.exists():
+            existing = pd.read_csv(self.alert_history_path)
+            combined = pd.concat([existing, row], ignore_index=True)
+        else:
+            combined = row
+        combined.tail(500).to_csv(self.alert_history_path, index=False)
+
+    def recent_alert_events(self, limit: int = 50) -> pd.DataFrame:
+        if not self.alert_history_path.exists():
+            return pd.DataFrame()
+        frame = pd.read_csv(self.alert_history_path)
+        return frame.tail(limit).iloc[::-1].reset_index(drop=True)
 
     def recent_recommendations(self, limit: int = 50) -> pd.DataFrame:
         if not self.recent_recommendations_path.exists():
