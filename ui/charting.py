@@ -24,6 +24,8 @@ class ChartControls:
     show_news: bool = True
     show_support_resistance: bool = False
     show_volatility_zones: bool = False
+    show_volume: bool = True
+    expanded_mode: bool = False
     ema_fast_period: int = 9
     ema_slow_period: int = 21
     breakout_window: int = 20
@@ -45,6 +47,7 @@ def _empty_payload(reason: str) -> dict[str, Any]:
         "session_windows": [],
         "volatility_zones": [],
         "context": {},
+        "has_volume": False,
     }
 
 
@@ -84,6 +87,7 @@ def prepare_chart_payload(
     volatility_zones = _volatility_zones(frame) if controls.show_volatility_zones else []
     trade_markers = _trade_markers(recommendation, paper_trades, controls.show_paper_trades, controls.show_recommendation)
     news_markers = _news_markers(news_events) if controls.show_news else pd.DataFrame(columns=["time", "title", "impact", "currency"])
+    has_volume = "volume" in frame.columns and frame["volume"].notna().any()
 
     context = _build_trade_context(frame, recommendation)
 
@@ -96,6 +100,7 @@ def prepare_chart_payload(
         "session_windows": session_windows,
         "volatility_zones": volatility_zones,
         "context": context,
+        "has_volume": has_volume,
     }
 
 
@@ -154,7 +159,7 @@ def _trade_markers(
     if show_recommendation and recommendation is not None:
         ts = pd.Timestamp(recommendation.timestamp).tz_localize("UTC") if recommendation.timestamp.tzinfo is None else pd.Timestamp(recommendation.timestamp)
         action = recommendation.action.value if hasattr(recommendation.action, "value") else str(recommendation.action)
-        color = "#16a34a" if action == "BUY" else "#ef4444" if action == "SELL" else "#94a3b8"
+        color = "#00C853" if action == "BUY" else "#FF5252" if action == "SELL" else "#94a3b8"
         rows.append({"time": ts, "price": recommendation.entry or recommendation.market_price, "label": f"Latest {action}", "kind": "recommendation", "color": color, "symbol": "diamond"})
         if recommendation.stop_loss:
             rows.append({"time": ts, "price": recommendation.stop_loss, "label": "SL", "kind": "risk", "color": "#fb7185", "symbol": "line-ns-open"})
@@ -250,14 +255,13 @@ def build_market_figure(payload: dict[str, Any], controls: ChartControls):
         raise RuntimeError(f"Plotly is required for chart rendering: {exc}") from exc
 
     frame = payload["candles"]
-    fig = make_subplots(
-        rows=3,
-        cols=1,
-        shared_xaxes=True,
-        vertical_spacing=0.03,
-        row_heights=[0.62, 0.19, 0.19],
-        subplot_titles=("Price", "RSI (14)", "ATR (14)"),
-    )
+    show_volume_panel = controls.show_volume and bool(payload.get("has_volume", False))
+    if show_volume_panel:
+        fig = make_subplots(rows=4, cols=1, shared_xaxes=True, vertical_spacing=0.02, row_heights=[0.58, 0.12, 0.15, 0.15], subplot_titles=("Price", "Volume", "RSI (14)", "ATR (14)"))
+        rsi_row, atr_row = 3, 4
+    else:
+        fig = make_subplots(rows=3, cols=1, shared_xaxes=True, vertical_spacing=0.03, row_heights=[0.62, 0.19, 0.19], subplot_titles=("Price", "RSI (14)", "ATR (14)"))
+        rsi_row, atr_row = 2, 3
 
     fig.add_trace(
         go.Candlestick(
@@ -267,27 +271,28 @@ def build_market_figure(payload: dict[str, Any], controls: ChartControls):
             low=frame["low"],
             close=frame["close"],
             name="Candles",
-            increasing_line_color="#22c55e",
-            decreasing_line_color="#ef4444",
-            increasing_fillcolor="#16a34a",
-            decreasing_fillcolor="#dc2626",
+            increasing_line_color="#00e676",
+            decreasing_line_color="#ff5252",
+            increasing_fillcolor="#00c853",
+            decreasing_fillcolor="#d50000",
+            whiskerwidth=0.2,
         ),
         row=1,
         col=1,
     )
 
     if controls.show_ema_fast:
-        fig.add_trace(go.Scatter(x=frame["time"], y=frame["ema_fast"], name=f"EMA {controls.ema_fast_period}", line={"color": "#38bdf8", "width": 1.8}), row=1, col=1)
+        fig.add_trace(go.Scatter(x=frame["time"], y=frame["ema_fast"], name=f"EMA {controls.ema_fast_period}", line={"color": "#00d4ff", "width": 1.6}), row=1, col=1)
     if controls.show_ema_slow:
-        fig.add_trace(go.Scatter(x=frame["time"], y=frame["ema_slow"], name=f"EMA {controls.ema_slow_period}", line={"color": "#f59e0b", "width": 1.8}), row=1, col=1)
+        fig.add_trace(go.Scatter(x=frame["time"], y=frame["ema_slow"], name=f"EMA {controls.ema_slow_period}", line={"color": "#ffd166", "width": 1.6}), row=1, col=1)
 
     if controls.show_breakout_levels and "breakout_high" in frame.columns:
-        fig.add_trace(go.Scatter(x=frame["time"], y=frame["breakout_high"], name="Breakout High", line={"color": "#a78bfa", "dash": "dot", "width": 1.2}), row=1, col=1)
-        fig.add_trace(go.Scatter(x=frame["time"], y=frame["breakout_low"], name="Breakout Low", line={"color": "#c084fc", "dash": "dot", "width": 1.2}), row=1, col=1)
+        fig.add_trace(go.Scatter(x=frame["time"], y=frame["breakout_high"], name="Breakout High", line={"color": "#9d4edd", "dash": "dot", "width": 1.2}), row=1, col=1)
+        fig.add_trace(go.Scatter(x=frame["time"], y=frame["breakout_low"], name="Breakout Low", line={"color": "#c77dff", "dash": "dot", "width": 1.2}), row=1, col=1)
 
     if controls.show_support_resistance and "support" in frame.columns:
-        fig.add_trace(go.Scatter(x=frame["time"], y=frame["support"], name="Support", line={"color": "#10b981", "dash": "dash", "width": 1}), row=1, col=1)
-        fig.add_trace(go.Scatter(x=frame["time"], y=frame["resistance"], name="Resistance", line={"color": "#f97316", "dash": "dash", "width": 1}), row=1, col=1)
+        fig.add_trace(go.Scatter(x=frame["time"], y=frame["support"], name="Support", line={"color": "#00e676", "dash": "dash", "width": 1}), row=1, col=1)
+        fig.add_trace(go.Scatter(x=frame["time"], y=frame["resistance"], name="Resistance", line={"color": "#ff9100", "dash": "dash", "width": 1}), row=1, col=1)
 
     markers = payload["trade_markers"]
     if not markers.empty:
@@ -298,7 +303,7 @@ def build_market_figure(payload: dict[str, Any], controls: ChartControls):
                 text=markers["label"],
                 mode="markers+text",
                 textposition="top center",
-                name="Signals/Trades",
+                name="Signals",
                 marker={"size": 10, "symbol": markers["symbol"], "color": markers["color"], "line": {"color": "#e2e8f0", "width": 0.7}},
             ),
             row=1,
@@ -309,46 +314,40 @@ def build_market_figure(payload: dict[str, Any], controls: ChartControls):
         events = payload["news_markers"].copy()
         events["y"] = frame["high"].max()
         events["hover"] = events["impact"].str.upper() + " | " + events["currency"] + " | " + events["title"]
-        event_colors = events["impact"].map({"high": "#ef4444", "red": "#ef4444", "medium": "#f59e0b", "orange": "#f59e0b"}).fillna("#60a5fa")
-        fig.add_trace(
-            go.Scatter(
-                x=events["time"],
-                y=events["y"],
-                mode="markers",
-                marker={"symbol": "diamond", "size": 9, "color": event_colors},
-                text=events["hover"],
-                name="News",
-                hovertemplate="%{text}<extra></extra>",
-            ),
-            row=1,
-            col=1,
-        )
+        event_colors = events["impact"].map({"high": "#ff1744", "red": "#ff1744", "medium": "#ff9100", "orange": "#ff9100"}).fillna("#29b6f6")
+        fig.add_trace(go.Scatter(x=events["time"], y=events["y"], mode="markers", marker={"symbol": "diamond", "size": 9, "color": event_colors}, text=events["hover"], name="News", hovertemplate="%{text}<extra></extra>"), row=1, col=1)
 
-    fig.add_trace(go.Scatter(x=frame["time"], y=frame["rsi"], name="RSI", line={"color": "#38bdf8", "width": 1.7}), row=2, col=1)
-    fig.add_hline(y=70, row=2, col=1, line_width=1, line_color="#ef4444", line_dash="dash")
-    fig.add_hline(y=30, row=2, col=1, line_width=1, line_color="#22c55e", line_dash="dash")
+    if show_volume_panel:
+        rising = frame["close"] >= frame["open"]
+        colors = rising.map({True: "rgba(0,230,118,0.5)", False: "rgba(255,82,82,0.5)"})
+        fig.add_trace(go.Bar(x=frame["time"], y=frame["volume"], name="Volume", marker={"color": colors}), row=2, col=1)
 
-    fig.add_trace(go.Scatter(x=frame["time"], y=frame["atr"], name="ATR", line={"color": "#f59e0b", "width": 1.7}), row=3, col=1)
+    fig.add_trace(go.Scatter(x=frame["time"], y=frame["rsi"], name="RSI", line={"color": "#4cc9f0", "width": 1.8}), row=rsi_row, col=1)
+    fig.add_hline(y=70, row=rsi_row, col=1, line_width=1, line_color="#ff6b6b", line_dash="dash")
+    fig.add_hline(y=30, row=rsi_row, col=1, line_width=1, line_color="#80ed99", line_dash="dash")
+    fig.add_trace(go.Scatter(x=frame["time"], y=frame["atr"], name="ATR", line={"color": "#ffbe0b", "width": 1.8}), row=atr_row, col=1)
 
     for window in payload["session_windows"] + payload["volatility_zones"]:
         fig.add_vrect(x0=window["start"], x1=window["end"], fillcolor=window["color"], opacity=0.25, line_width=0, row=1, col=1)
 
     fig.update_layout(
-        height=860,
+        height=1040 if controls.expanded_mode else 900,
         dragmode="pan",
-        margin={"t": 50, "r": 20, "b": 20, "l": 20},
+        margin={"t": 42, "r": 12, "b": 18, "l": 12},
         template="plotly_dark",
-        paper_bgcolor="#020617",
-        plot_bgcolor="#0b1220",
+        paper_bgcolor="#060b16",
+        plot_bgcolor="#0b1321",
         hovermode="x unified",
-        legend={"orientation": "h", "yanchor": "bottom", "y": 1.01, "x": 0.01, "bgcolor": "rgba(2,6,23,0.65)", "font": {"size": 11}},
+        legend={"orientation": "h", "yanchor": "bottom", "y": 1.01, "x": 0.0, "bgcolor": "rgba(6,11,22,0.78)", "font": {"size": 11}},
         xaxis_rangeslider_visible=False,
         font={"family": "Inter, Segoe UI, sans-serif", "size": 12},
     )
-    fig.update_xaxes(showgrid=True, gridcolor="rgba(71,85,105,0.30)", zeroline=False)
-    fig.update_yaxes(showgrid=True, gridcolor="rgba(71,85,105,0.25)", zeroline=False)
+    fig.update_xaxes(showgrid=True, gridcolor="rgba(148,163,184,0.18)", zeroline=False)
+    fig.update_yaxes(showgrid=True, gridcolor="rgba(148,163,184,0.15)", zeroline=False)
     fig.update_yaxes(title_text="Price", row=1, col=1)
-    fig.update_yaxes(title_text="RSI", row=2, col=1, range=[0, 100])
-    fig.update_yaxes(title_text="ATR", row=3, col=1)
+    if show_volume_panel:
+        fig.update_yaxes(title_text="Volume", row=2, col=1)
+    fig.update_yaxes(title_text="RSI", row=rsi_row, col=1, range=[0, 100])
+    fig.update_yaxes(title_text="ATR", row=atr_row, col=1)
 
     return fig

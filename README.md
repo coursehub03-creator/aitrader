@@ -60,6 +60,36 @@ The project includes a premium local dashboard for manual decision support:
 - Unified learning scores (`historical_score`, `recent_score`, `combined_score`) and lifecycle tracking
 - Market Visuals tab with interactive professional charting (candles, overlays, sessions, news, and trade markers)
 
+
+### Live Trading-Terminal Dashboard Upgrade (April 2026)
+
+The Streamlit UI now ships with a denser **trading-terminal style workspace**:
+
+- Top ticker/status strip (symbol, price, spread, session, market/news status, strategy, signal strength)
+- Left watchlist + quick symbol switching
+- Large center chart workspace with live refresh controls
+- Right intelligence panel for recommendation diagnostics
+- Bottom live panels for history, paper-trades, alerts, and learning activity
+- Compact mode + expanded chart mode
+
+#### Watch mode + live chart refresh
+
+- Use **Run cycle now** for manual update.
+- Enable **Auto refresh** to run recurring cycles using a configurable interval.
+- Enable **Watch mode** to evaluate/send alerts each cycle.
+- Every refresh updates recommendation, chart overlays, market/news status, watchlist snapshots, and alert/history panels.
+- Session state preserves selected symbol/timeframe and operator toggles during refresh.
+
+#### Current limitations vs full trading terminals
+
+- Streamlit rerun behavior can still cause partial UI redraw under frequent refresh intervals.
+- Chart interactions are strong (Plotly pan/zoom/hover), but lower-latency streaming and advanced docking layouts are limited compared with dedicated JS terminals.
+- No live order execution is implemented by design (recommendation-only, paper-trading-only scope).
+
+#### Future frontend path (FastAPI + React/Next.js)
+
+The repository now includes clearer UI data-preparation separation (`ui/terminal_view_model.py`) so the same panel payloads can be served later through a FastAPI layer and rendered by a React/Next.js terminal frontend.
+
 ### Self-Learning Center (Learning Control Center)
 
 The dashboard now includes a dedicated **Self-Learning Center** tab for transparent, operator-grade monitoring of learning decisions.
