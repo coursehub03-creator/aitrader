@@ -79,6 +79,8 @@ def ensure_state() -> None:
         "compact_mode": False,
         "expanded_chart": False,
         "recommendation_history": [],
+        "optimizer_output": pd.DataFrame(),
+        "validation_output": pd.DataFrame(),
     }
     for k, v in defaults.items():
         if k not in st.session_state:
@@ -231,31 +233,33 @@ def render_recommendation_panel(recommendation: FinalRecommendation | None) -> N
                 st.markdown(f"- {reason}")
 
 
-def render_bottom_panels(service: DashboardService) -> None:
-    tabs = st.tabs(["History", "Paper Trades", "Alerts", "Learning Activity"])
-    with tabs[0]:
-        recent_disk = service.recent_recommendations(limit=80)
-        recent = pd.DataFrame(st.session_state.recommendation_history)
-        merged = pd.concat([recent, recent_disk], ignore_index=True).drop_duplicates(subset=["timestamp", "symbol", "selected_strategy", "action"], keep="first") if not recent.empty else recent_disk
-        st.dataframe(merged.head(120), use_container_width=True, hide_index=True, height=280)
-    with tabs[1]:
-        paper = service.load_paper_trades(limit=120)
-        st.dataframe(paper if not paper.empty else pd.DataFrame([{"info": "No paper trades yet"}]), use_container_width=True, hide_index=True, height=280)
-    with tabs[2]:
-        alerts = prepare_alert_rows(service.recent_alert_events(limit=80), limit=80)
-        st.dataframe(alerts if not alerts.empty else pd.DataFrame([{"info": "No alerts yet"}]), use_container_width=True, hide_index=True, height=280)
-        st.caption(f"Telegram status: {st.session_state.latest_alert_status} | reason: {st.session_state.latest_alert_reason or 'n/a'}")
-    with tabs[3]:
-        payload = service.learning_center_payload()
-        health = payload["health"]
-        m = st.columns(6)
-        m[0].metric("Learning Health", str(health.get("status", "n/a")).upper())
-        m[1].metric("Active Strategies", health.get("active_strategies", 0))
-        m[2].metric("Candidates", health.get("candidate_strategies", 0))
-        m[3].metric("Disabled", health.get("disabled_strategies", 0))
-        m[4].metric("Last Optimization", health.get("last_optimization_run", "n/a"))
-        m[5].metric("Last Validation", health.get("last_historical_validation_run", "n/a"))
-        st.dataframe(payload["events"].head(80), use_container_width=True, hide_index=True, height=240)
+def render_history_panel(service: DashboardService) -> None:
+    recent_disk = service.recent_recommendations(limit=80)
+    recent = pd.DataFrame(st.session_state.recommendation_history)
+    merged = (
+        pd.concat([recent, recent_disk], ignore_index=True)
+        .drop_duplicates(subset=["timestamp", "symbol", "selected_strategy", "action"], keep="first")
+        if not recent.empty
+        else recent_disk
+    )
+    st.dataframe(merged.head(120), use_container_width=True, hide_index=True, height=320)
+
+
+def render_alerts_panel(service: DashboardService) -> None:
+    alerts = prepare_alert_rows(service.recent_alert_events(limit=80), limit=80)
+    st.dataframe(alerts if not alerts.empty else pd.DataFrame([{"info": "No alerts yet"}]), use_container_width=True, hide_index=True, height=320)
+    st.caption(f"Telegram status: {st.session_state.latest_alert_status} | reason: {st.session_state.latest_alert_reason or 'n/a'}")
+
+
+def render_learning_health(payload: dict) -> None:
+    health = payload["health"]
+    m = st.columns(6)
+    m[0].metric("Learning Health", str(health.get("status", "n/a")).upper())
+    m[1].metric("Active Strategies", health.get("active_strategies", 0))
+    m[2].metric("Candidates", health.get("candidate_strategies", 0))
+    m[3].metric("Disabled", health.get("disabled_strategies", 0))
+    m[4].metric("Last Optimization", health.get("last_optimization_run", "n/a"))
+    m[5].metric("Last Validation", health.get("last_historical_validation_run", "n/a"))
 
 
 def sidebar_controls() -> None:
@@ -268,6 +272,9 @@ def sidebar_controls() -> None:
     st.session_state.auto_refresh = st.sidebar.toggle("Auto refresh", value=st.session_state.auto_refresh)
     st.session_state.refresh_interval = int(st.sidebar.number_input("Live refresh (seconds)", min_value=3, max_value=3600, value=int(st.session_state.refresh_interval), step=1))
     st.session_state.run_now = st.sidebar.button("Run cycle now", type="primary", use_container_width=True)
+    st.session_state.refresh_now = st.sidebar.button("Refresh market data", use_container_width=True)
+    st.session_state.run_optimizer_now = st.sidebar.button("Run optimizer", use_container_width=True)
+    st.session_state.run_validation_now = st.sidebar.button("Run historical validation", use_container_width=True)
 
 
 def handle_refresh() -> None:
@@ -311,41 +318,107 @@ def main() -> None:
     else:
         st.session_state.monitoring_state = "idle"
 
+    if st.session_state.refresh_now:
+        _load_chart_candles.clear()
+        _load_chart_news.clear()
+
     rec = st.session_state.last_recommendation
-    _, snapshots = render_watchlist(service, COMMON_SYMBOLS, state.timeframe, st.session_state.recommendations_by_symbol)
-    render_status_strip(rec, state.symbol, state.timeframe, snapshots)
+    if st.session_state.run_optimizer_now:
+        with st.spinner("Running optimizer..."):
+            optimizer_table = service.run_optimizer(state.symbol, state.timeframe)
+        st.session_state.optimizer_output = optimizer_table
+    if st.session_state.run_validation_now:
+        with st.spinner("Running historical validation..."):
+            validation_table = service.run_historical_validation()
+        st.session_state.validation_output = validation_table
 
-    if rec and rec.market_status == "mt5_unavailable":
-        st.error("⚠️ MT5 is unavailable. Dashboard remains live but recommendations are forced to NO_TRADE.")
-    if rec and rec.market_status == "closed":
-        st.warning("🚫 Market is closed for active symbol/timeframe.")
+    top_tabs = st.tabs(["Trading Cockpit", "Market Visuals", "Self-Learning Center"])
 
-    left, center, right = st.columns([1.05, 2.65 if state.expanded_chart else 2.15, 1.15], gap="small")
+    with top_tabs[0]:
+        cockpit_tabs = st.tabs(["Overview", "History", "Alerts"])
+        with cockpit_tabs[0]:
+            watch_col, summary_col = st.columns([1.1, 2.1], gap="small")
+            with watch_col:
+                st.markdown("### Watchlist")
+                _, snapshots = render_watchlist(service, COMMON_SYMBOLS, state.timeframe, st.session_state.recommendations_by_symbol)
+                for sym in COMMON_SYMBOLS:
+                    if st.button(sym, key=f"jump_{sym}", use_container_width=True):
+                        st.session_state.selected_symbol = sym
+                        st.rerun()
+                st.caption(f"Monitoring: {st.session_state.monitoring_state} • Last refresh: {st.session_state.last_refresh_label}")
+            with summary_col:
+                render_status_strip(rec, state.symbol, state.timeframe, snapshots)
+                if rec and rec.market_status == "mt5_unavailable":
+                    st.error("⚠️ MT5 is unavailable. Dashboard remains live but recommendations are forced to NO_TRADE.")
+                if rec and rec.market_status == "closed":
+                    st.warning("🚫 Market is closed for active symbol/timeframe.")
+                if rec and rec.market_status == "unknown":
+                    st.info("ℹ️ MT5 market state is unknown right now; safety filters remain enabled.")
+                left, right = st.columns([1.35, 1.0], gap="small")
+                with left:
+                    st.markdown("### Current Recommendation")
+                    render_recommendation_panel(rec)
+                    if rec is not None:
+                        st.markdown("### Operational State")
+                        c = st.columns(4)
+                        c[0].metric("Market Status", rec.market_status)
+                        c[1].metric("News Status", rec.news_status)
+                        c[2].metric("Spread State", rec.spread_state)
+                        c[3].metric("Symbol Profile", rec.symbol_profile)
+                with right:
+                    st.markdown("### Current Symbol Metrics")
+                    snap = snapshots.get(state.symbol, {"last_price": 0.0, "daily_change_pct": 0.0, "market_status": "unknown"})
+                    st.metric("Last Price", f"{float(snap.get('last_price', 0.0)):.5f}" if snap.get("last_price") else "n/a")
+                    st.metric("Daily Change", f"{float(snap.get('daily_change_pct', 0.0)):+.2f}%")
+                    st.metric("Market Snapshot", str(snap.get("market_status", "unknown")))
+                    st.markdown("### Recent Recommendation Summary")
+                    render_history_panel(service)
+        with cockpit_tabs[1]:
+            render_history_panel(service)
+        with cockpit_tabs[2]:
+            render_alerts_panel(service)
 
-    with left:
-        st.markdown("### Watchlist")
-        for sym in COMMON_SYMBOLS:
-            if st.button(sym, key=f"jump_{sym}", use_container_width=True):
-                st.session_state.selected_symbol = sym
-                st.rerun()
-        st.caption(f"Monitoring: {st.session_state.monitoring_state} • Last refresh: {st.session_state.last_refresh_label}")
-
-    with center:
-        st.markdown("### Market Workspace")
+    with top_tabs[1]:
+        st.markdown("### Live Chart Workspace")
         render_chart(service, state.symbol, state.timeframe, rec, state.expanded_chart)
+        if not state.compact_mode:
+            st.markdown("### Trade Visual Context")
+            paper = service.load_paper_trades(limit=80)
+            st.dataframe(paper if not paper.empty else pd.DataFrame([{"info": "No paper trades yet"}]), use_container_width=True, hide_index=True, height=260)
 
-    with right:
-        st.markdown("### Intelligence")
-        render_recommendation_panel(rec)
-        if rec is not None:
-            st.metric("Market Status", rec.market_status)
-            st.metric("News Status", rec.news_status)
-            st.metric("Spread State", rec.spread_state)
-            st.metric("Symbol Profile", rec.symbol_profile)
-
-    if not state.compact_mode:
-        st.markdown("---")
-        render_bottom_panels(service)
+    with top_tabs[2]:
+        payload = service.learning_center_payload()
+        learning_tabs = st.tabs(["Overview", "Active/Candidates", "Historical", "Paper Trades", "Events"])
+        with learning_tabs[0]:
+            render_learning_health(payload)
+            st.markdown("### Best Configuration per Symbol")
+            best_config = payload.get("best_config", pd.DataFrame())
+            st.dataframe(best_config if isinstance(best_config, pd.DataFrame) and not best_config.empty else pd.DataFrame([{"info": "No best configuration data yet"}]), use_container_width=True, hide_index=True, height=260)
+        with learning_tabs[1]:
+            c1, c2 = st.columns(2, gap="small")
+            c1.markdown("### Active Strategies")
+            c1.dataframe(payload["active"], use_container_width=True, hide_index=True, height=300)
+            c2.markdown("### Candidate Strategies")
+            c2.dataframe(payload["candidates"], use_container_width=True, hide_index=True, height=300)
+        with learning_tabs[2]:
+            st.markdown("### Historical Validation")
+            historical = payload["historical_validation"]
+            st.dataframe(historical if not historical.empty else pd.DataFrame([{"info": "No historical validation yet"}]), use_container_width=True, hide_index=True, height=300)
+            if "validation_output" in st.session_state:
+                st.markdown("### Latest Validation Run")
+                st.dataframe(st.session_state.validation_output, use_container_width=True, hide_index=True, height=240)
+        with learning_tabs[3]:
+            st.markdown("### Paper Trades")
+            paper = service.load_paper_trades(limit=200)
+            st.dataframe(paper if not paper.empty else pd.DataFrame([{"info": "No paper trades yet"}]), use_container_width=True, hide_index=True, height=320)
+        with learning_tabs[4]:
+            st.markdown("### Learning Events")
+            st.dataframe(payload["events"].head(120), use_container_width=True, hide_index=True, height=260)
+            st.markdown("### State Changes")
+            st.dataframe(payload["state_changes_prepared"].head(120), use_container_width=True, hide_index=True, height=260)
+            if "optimizer_output" in st.session_state:
+                st.markdown("### Latest Optimizer Run")
+                st.dataframe(st.session_state.optimizer_output, use_container_width=True, hide_index=True, height=220)
 
     handle_refresh()
 

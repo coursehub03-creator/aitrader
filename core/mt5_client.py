@@ -196,7 +196,16 @@ class MT5Client:
             LOGGER.warning(self.status_message)
             return pd.DataFrame(columns=["time", "open", "high", "low", "close", "volume"])
 
-        return self._to_ohlcv_dataframe(rates)
+        try:
+            return self._to_ohlcv_dataframe(rates)
+        except ValueError as exc:
+            self.status_message = f"Malformed rates returned for {symbol}/{timeframe}: {exc}"
+            LOGGER.warning(self.status_message)
+            return pd.DataFrame(columns=["time", "open", "high", "low", "close", "volume"])
+        except Exception as exc:  # pragma: no cover - defensive layer
+            self.status_message = f"Failed to normalize rates for {symbol}/{timeframe}: {exc}"
+            LOGGER.exception(self.status_message)
+            return pd.DataFrame(columns=["time", "open", "high", "low", "close", "volume"])
 
     def get_ohlcv(self, symbol: str, timeframe: str, bars: int) -> pd.DataFrame:
         """Backward-compatible alias for fetch_rates()."""
@@ -236,7 +245,16 @@ class MT5Client:
             self.status_message = f"No historical rates returned for {symbol}/{timeframe} in selected range"
             return pd.DataFrame(columns=["time", "open", "high", "low", "close", "volume"])
 
-        return self._to_ohlcv_dataframe(rates)
+        try:
+            return self._to_ohlcv_dataframe(rates)
+        except ValueError as exc:
+            self.status_message = f"Malformed historical rates returned for {symbol}/{timeframe}: {exc}"
+            LOGGER.warning(self.status_message)
+            return pd.DataFrame(columns=["time", "open", "high", "low", "close", "volume"])
+        except Exception as exc:  # pragma: no cover - defensive layer
+            self.status_message = f"Failed to normalize historical rates for {symbol}/{timeframe}: {exc}"
+            LOGGER.exception(self.status_message)
+            return pd.DataFrame(columns=["time", "open", "high", "low", "close", "volume"])
 
     def detect_market_status(self, symbol: str, timeframe: str) -> tuple[str, str]:
         """Return market status and reason for a symbol/timeframe pair.
@@ -292,41 +310,36 @@ class MT5Client:
             LOGGER.exception(self.status_message)
             return "closed", self.status_message
 
-        if rates is None or len(rates) == 0:
-            self.status_message = f"No recent rates for {symbol}/{timeframe}; market likely closed"
-            return "closed", self.status_message
-
         try:
-            df = pd.DataFrame(rates)
-        except Exception as exc:
+            df = self._safe_rates_dataframe(rates)
+        except ValueError as exc:
             self.status_message = (
-                f"Invalid rates payload for {symbol}/{timeframe}; "
-                f"market status fallback to closed: {exc}"
+                f"Cannot determine market status safely for {symbol}/{timeframe}: {exc}. "
+                "Fallback status set to unknown"
             )
             LOGGER.warning(self.status_message)
-            return "closed", self.status_message
+            return "unknown", self.status_message
+        except Exception as exc:  # pragma: no cover - defensive layer
+            self.status_message = (
+                f"Unexpected market status normalization failure for {symbol}/{timeframe}: {exc}. "
+                "Fallback status set to unknown"
+            )
+            LOGGER.exception(self.status_message)
+            return "unknown", self.status_message
 
         if df.empty:
-            self.status_message = f"No recent rates for {symbol}/{timeframe}; market likely closed"
-            return "closed", self.status_message
-
-        if "time" not in df.columns:
-            self.status_message = (
-                f"MT5 rates missing time column for {symbol}/{timeframe}; "
-                "market status fallback to closed"
-            )
-            LOGGER.warning(self.status_message)
-            return "closed", self.status_message
+            self.status_message = f"No recent rates for {symbol}/{timeframe}; market status unknown"
+            return "unknown", self.status_message
 
         df["time"] = pd.to_datetime(df["time"], unit="s", utc=True, errors="coerce")
         latest_time_value = df.iloc[-1]["time"]
         if pd.isna(latest_time_value):
             self.status_message = (
                 f"MT5 rates contain invalid time values for {symbol}/{timeframe}; "
-                "market status fallback to closed"
+                "market status fallback to unknown"
             )
             LOGGER.warning(self.status_message)
-            return "closed", self.status_message
+            return "unknown", self.status_message
 
         latest_time = int(latest_time_value.timestamp())
         if (now_ts - latest_time) <= stale_after:
@@ -418,7 +431,7 @@ class MT5Client:
     @staticmethod
     def _to_ohlcv_dataframe(rates: Any) -> pd.DataFrame:
         columns = ["time", "open", "high", "low", "close", "volume"]
-        df = pd.DataFrame(rates)
+        df = MT5Client._safe_rates_dataframe(rates)
         if df.empty:
             return pd.DataFrame(columns=columns)
 
@@ -437,3 +450,17 @@ class MT5Client:
         df["time"] = pd.to_datetime(df["time"], unit="s", utc=True)
         standardized = df[columns].copy()
         return standardized.reset_index(drop=True)
+
+    @staticmethod
+    def _safe_rates_dataframe(rates: Any) -> pd.DataFrame:
+        if rates is None:
+            return pd.DataFrame()
+        try:
+            df = pd.DataFrame(rates)
+        except Exception as exc:
+            raise ValueError(f"rates payload is not DataFrame-convertible: {exc}") from exc
+        if df.empty:
+            return df
+        if "time" not in df.columns:
+            raise ValueError("rates payload missing required 'time' column")
+        return df

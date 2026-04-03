@@ -54,6 +54,8 @@ class FakeMT5:
     ) -> list[dict[str, float | int]] | None:
         if symbol == "EMPTY":
             return None
+        if symbol == "MALFORMED":
+            return [{"open": 1.1, "close": 1.2}]
         if symbol == "STALE_EMPTY":
             return []
         if symbol == "STALE_BAD_STRUCT":
@@ -136,6 +138,21 @@ def test_fetch_multi_timeframe_rates(monkeypatch) -> None:
     assert all(len(frame) == 2 for frame in results.values())
 
 
+def test_fetch_rates_empty_and_malformed_payloads(monkeypatch) -> None:
+    fake_mt5 = FakeMT5()
+    monkeypatch.setattr(mt5_module, "mt5", fake_mt5)
+
+    client = MT5Client()
+    assert client.initialize()
+
+    empty = client.fetch_rates("EMPTY", "M5", 5)
+    assert empty.empty
+
+    malformed = client.fetch_rates("MALFORMED", "M5", 5)
+    assert malformed.empty
+    assert "Malformed rates returned" in client.status_message
+
+
 def test_timeframe_roundtrip() -> None:
     assert MT5Client.timeframe_to_mt5_constant("M5") == 5
     assert MT5Client.mt5_constant_to_timeframe(16385) == "H1"
@@ -151,9 +168,9 @@ def test_detect_market_status_variants(monkeypatch) -> None:
 
     assert client.detect_market_status("EURUSD", "M5")[0] == "open"
     assert client.detect_market_status("STALE", "M5")[0] == "closed"
-    assert client.detect_market_status("STALE_EMPTY", "M5")[0] == "closed"
-    assert client.detect_market_status("STALE_BAD_STRUCT", "M5")[0] == "closed"
-    assert client.detect_market_status("STALE_BAD_TIME", "M5")[0] == "closed"
+    assert client.detect_market_status("STALE_EMPTY", "M5")[0] == "unknown"
+    assert client.detect_market_status("STALE_BAD_STRUCT", "M5")[0] == "unknown"
+    assert client.detect_market_status("STALE_BAD_TIME", "M5")[0] == "unknown"
     assert client.detect_market_status("MISSING", "M5")[0] == "unavailable"
     assert client.detect_market_status("NOT_TRADABLE", "M5")[0] == "unavailable"
 
