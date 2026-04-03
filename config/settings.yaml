@@ -75,6 +75,10 @@ recommendation:
 monitoring:
   interval_seconds: 300
   alert_cooldown_seconds: 900
+  send_rejected_alerts: false
+  send_summary_alerts: false
+  minimum_signal_strength_for_alert: strong
+  minimum_confidence_for_alert: 0.6
   symbols: [EURUSD, GBPUSD, USDJPY]
   telegram:
     enabled: false

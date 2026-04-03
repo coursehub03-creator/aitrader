@@ -5,6 +5,7 @@ from __future__ import annotations
 from dataclasses import asdict
 from datetime import datetime, timezone
 import json
+import logging
 from pathlib import Path
 from typing import Any
 
@@ -17,8 +18,10 @@ from core.paper_trading import PaperTrader, TradeStore
 from core.types import FinalRecommendation, PaperTradeResult, SignalAction
 from learning.evaluator import PerformanceEvaluator
 from monitoring.alerts import AlertPolicy, AlertCooldownStore
-from notification.telegram_notifier import TelegramConfig, TelegramNotifier
+from notification.telegram_notifier import TelegramNotifier
 from strategy.registry import create_default_strategies
+
+LOGGER = logging.getLogger(__name__)
 
 
 class DashboardService:
@@ -40,14 +43,35 @@ class DashboardService:
         self.settings = load_settings(self.settings_path)
         self.engine = build_engine(self.settings)
 
-    def evaluate_and_send_alert(self, recommendation: FinalRecommendation) -> tuple[str, str]:
+    def evaluate_and_send_alert(self, recommendation: FinalRecommendation) -> tuple[str, str, bool, str]:
         policy = AlertPolicy(
-            min_confidence=float(self.settings.get("recommendation.min_confidence", 0.6)),
+            min_confidence=float(
+                self.settings.get(
+                    "monitoring.minimum_confidence_for_alert",
+                    self.settings.get("recommendation.min_confidence", 0.6),
+                )
+            ),
             min_risk_reward=float(self.settings.get("recommendation.min_risk_reward", 1.5)),
+            min_signal_strength=str(self.settings.get("monitoring.minimum_signal_strength_for_alert", "strong")),
         )
         qualifies, qualify_reason = policy.qualifies(recommendation)
+        alert_type = "strong_trade_alert"
         if not qualifies:
-            return "suppressed", qualify_reason
+            if not bool(self.settings.get("monitoring.send_rejected_alerts", False)):
+                return "suppressed", qualify_reason, False, alert_type
+            rejection_map = {
+                "market_closed_or_unavailable": "trade_blocked_by_market_closed",
+                "news_blocked": "trade_blocked_by_news",
+                "confidence_below_threshold": "trade_blocked_by_filters",
+                "risk_reward_below_threshold": "trade_blocked_by_filters",
+                "weak_or_medium_signal": "trade_blocked_by_filters",
+            }
+            alert_type = rejection_map.get(qualify_reason, "rejected_signal_alert")
+            notifier = TelegramNotifier.from_settings(self.settings)
+            sent, send_reason = notifier.send_recommendation_alert(recommendation, alert_type=alert_type)
+            if sent:
+                return "sent", send_reason, True, alert_type
+            return "failed", send_reason, False, alert_type
 
         cooldown = AlertCooldownStore(
             self.alert_state_path,
@@ -56,21 +80,15 @@ class DashboardService:
         key = cooldown.build_key(recommendation)
         can_send, cooldown_reason = cooldown.can_send(key, datetime.now(tz=timezone.utc))
         if not can_send:
-            return "suppressed", cooldown_reason
+            LOGGER.info("Dashboard alert suppressed by cooldown for %s: %s", recommendation.symbol, cooldown_reason)
+            return "suppressed", cooldown_reason, False, alert_type
 
-        notifier = TelegramNotifier(
-            TelegramConfig(
-                enabled=bool(self.settings.get("monitoring.telegram.enabled", False)),
-                bot_token=str(self.settings.get("monitoring.telegram.bot_token", "")),
-                chat_id=str(self.settings.get("monitoring.telegram.chat_id", "")),
-                timeout_seconds=float(self.settings.get("monitoring.telegram.timeout_seconds", 10)),
-            )
-        )
-        sent, send_reason = notifier.send_recommendation_alert(recommendation)
+        notifier = TelegramNotifier.from_settings(self.settings)
+        sent, send_reason = notifier.send_recommendation_alert(recommendation, alert_type=alert_type)
         if sent:
             cooldown.mark_sent(key, datetime.now(tz=timezone.utc))
-            return "sent", send_reason
-        return "failed", send_reason
+            return "sent", send_reason, True, alert_type
+        return "failed", send_reason, False, alert_type
 
     @staticmethod
     def recommendation_to_record(recommendation: FinalRecommendation) -> dict[str, Any]:
@@ -147,18 +165,28 @@ class DashboardService:
         combined = combined.tail(500)
         combined.to_csv(self.recent_recommendations_path, index=False)
 
-    def persist_alert_event(self, recommendation: FinalRecommendation, status: str, reason: str) -> None:
+    def persist_alert_event(
+        self,
+        recommendation: FinalRecommendation,
+        status: str,
+        reason: str,
+        triggered: bool,
+        alert_type: str,
+    ) -> None:
         row = pd.DataFrame(
             [
                 {
                     "timestamp": datetime.now(tz=timezone.utc).isoformat(timespec="seconds"),
                     "symbol": recommendation.symbol,
-                    "action": recommendation.action.value if hasattr(recommendation.action, "value") else recommendation.action,
-                    "signal_strength": recommendation.signal_strength,
-                    "confidence": recommendation.confidence,
-                    "risk_reward": recommendation.risk_reward,
+                    "timeframe": recommendation.timeframe,
+                    "alert_type": alert_type,
+                    "message_summary": f"{recommendation.symbol} {recommendation.timeframe} {recommendation.action} {recommendation.signal_strength}",
+                    "sent": status == "sent",
+                    "suppressed": status == "suppressed",
+                    "suppression_reason": reason if status == "suppressed" else "",
                     "status": status,
                     "reason": reason,
+                    "triggered": triggered,
                 }
             ]
         )

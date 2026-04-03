@@ -101,6 +101,8 @@ class FinalRecommendation:
     selected_strategy: str
     market_status: str
     news_status: str
+    spread_state: str = "unknown"
+    session_state: str = "unknown"
     mt5_connection_status: str = "unknown"
     signal_strength: str = "weak"
     rejection_reason: str | None = None

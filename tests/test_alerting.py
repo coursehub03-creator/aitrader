@@ -51,6 +51,9 @@ def test_telegram_message_contains_required_fields() -> None:
         "Selected Strategy",
         "Market Status",
         "News Status",
+        "Spread State",
+        "Session State",
+        "Risk/Reward",
         "Reasons",
         "Timestamp",
     ]:
@@ -70,6 +73,7 @@ def test_cooldown_logic_suppresses_duplicate_alerts(tmp_path) -> None:
     can_send_again, reason = store.can_send(key, now + timedelta(seconds=60))
     assert can_send_again is False
     assert reason == "duplicate_suppressed_by_cooldown"
+    assert key == "EURUSD:M5:BUY"
 
 
 def test_cooldown_allows_after_expiry(tmp_path) -> None:
@@ -106,3 +110,10 @@ def test_no_alert_for_weak_signal() -> None:
 
     assert qualifies is False
     assert reason == "weak_or_medium_signal"
+
+
+def test_safe_failure_when_telegram_not_configured() -> None:
+    notifier = TelegramNotifier(TelegramConfig(enabled=True, bot_token="", chat_id=""))
+    sent, reason = notifier.send_recommendation_alert(_recommendation())
+    assert sent is False
+    assert reason == "telegram_not_configured"

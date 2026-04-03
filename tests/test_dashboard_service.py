@@ -62,3 +62,39 @@ def test_generate_recommendation_returns_no_trade_on_error(tmp_path) -> None:
     assert rec.market_status == "mt5_unavailable"
     assert rec.news_status == "unknown"
     assert "Runtime error" in rec.reasons[0]
+
+
+def test_alert_history_recording(tmp_path) -> None:
+    service = DashboardService.__new__(DashboardService)
+    service.alert_history_path = tmp_path / "alerts.csv"
+
+    rec = FinalRecommendation(
+        symbol="EURUSD",
+        timeframe="M5",
+        action=SignalAction.BUY,
+        market_price=1.1,
+        entry=1.1,
+        stop_loss=1.09,
+        take_profit=1.12,
+        risk_reward=2.0,
+        confidence=0.75,
+        selected_strategy="trend_rsi",
+        market_status="open",
+        news_status="clear",
+        reasons=["trend aligned"],
+        timestamp=datetime(2026, 1, 1),
+    )
+
+    service.persist_alert_event(
+        rec,
+        status="suppressed",
+        reason="duplicate_suppressed_by_cooldown",
+        triggered=False,
+        alert_type="strong_trade_alert",
+    )
+    frame = service.recent_alert_events(limit=10)
+    assert len(frame) == 1
+    assert frame.loc[0, "symbol"] == "EURUSD"
+    assert frame.loc[0, "timeframe"] == "M5"
+    assert frame.loc[0, "alert_type"] == "strong_trade_alert"
+    assert bool(frame.loc[0, "suppressed"]) is True
