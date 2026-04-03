@@ -79,7 +79,18 @@ def test_persists_structured_and_state_artifacts(tmp_path: Path) -> None:
     optimizer_path = persistence.save_optimizer_results(optimizer, "EURUSD", "M5")
     assert optimizer_path.exists()
 
-    persistence.append_strategy_state_change({"symbol": "EURUSD", "strategy": "trend_rsi", "new_state": "stable"})
+    persistence.append_strategy_state_change({"symbol": "EURUSD", "strategy": "trend_rsi", "new_state": "active"})
+    persistence.append_strategy_score_snapshot(
+        {
+            "timestamp": "2026-04-03T00:00:03+00:00",
+            "symbol": "EURUSD",
+            "strategy_name": "trend_rsi",
+            "historical_score": 44.0,
+            "recent_score": 41.0,
+            "combined_score": 42.2,
+            "lifecycle_state": "active",
+        }
+    )
     persistence.append_lifecycle_event(
         symbol="EURUSD",
         strategy="trend_rsi",
@@ -93,8 +104,13 @@ def test_persists_structured_and_state_artifacts(tmp_path: Path) -> None:
         "strategy_lifecycle_events",
         ["symbol", "strategy", "event_type", "previous_state", "new_state", "reason"],
     )
+    score_rows = persistence.safe_read_table(
+        "strategy_score_snapshots",
+        ["symbol", "strategy_name", "combined_score", "lifecycle_state"],
+    )
     assert len(state_rows) == 1
     assert lifecycle_rows.iloc[0]["event_type"] == "promoted"
+    assert len(score_rows) == 1
 
     best_path = persistence.save_best_params("EURUSD", "M5", "trend_rsi", {"ema_fast": 20}, 42.5)
     assert best_path.exists()
