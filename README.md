@@ -1,574 +1,240 @@
-# AITrader - MT5 Trading Recommendation System
+# AITrader Beta (MT5 Recommendation Assistant)
 
-A production-ready Python project for **AI-assisted trading recommendations** using **MetaTrader 5** market data.
+AITrader is a **local-first, operator-facing beta** for foreign-exchange and metals market analysis using **MetaTrader 5** candles.
 
-## Important Safety Scope
+It is intentionally scoped to:
+- ✅ recommendation-only signals (`BUY`, `SELL`, `NO_TRADE`)
+- ✅ paper-trading simulation
+- ✅ human-in-the-loop operation
+- ❌ no live order execution
 
-- ✅ Recommendations only (`Buy` / `Sell` / `No Trade`)
-- ✅ Paper-trading simulation only
-- ❌ No live order execution
+---
 
-## Features
+## 1) Safety and Beta Scope
 
-- MT5 connector with safe import handling (app does not crash when the MetaTrader5 package is unavailable)
-- Market-open awareness (`market_status`: `open`, `closed`, `unavailable`, `mt5_unavailable`) before strategy aggregation
-- Multi-symbol recommendation flow (`--symbol`)
-- News provider abstraction (swappable providers)
-- ForexFactory-compatible provider implementation
-- High-impact news cooldown filter (blocks recommendations around key events)
-- Strategy layer with a base strategy contract (`BaseStrategy`)
-- Strategy registry/factory for pluggable strategy loading
-- Two starter strategies:
-  - Trend + RSI
-  - Breakout + ATR
-- Normalized strategy signals (`BUY` / `SELL` / `NO_TRADE`) with entry/SL/TP/confidence/reasons
-- Paper trade simulator
-- Structured paper-trade persistence (CSV/SQLite)
-- Strategy evaluator and leaderboard with risk filters
-- Self-optimization layer with grid/randomized search, train/validation/forward scoring, and anti-overfit ranking
-- Modular architecture for long-term development
+This repository is prepared as a near-final **beta release** for operator testing.
 
-## Architecture
+Core guardrails:
+- Recommendations are advisory and can be blocked by market/news/risk filters.
+- No broker execution path is implemented.
+- Paper-trade and learning loops are local persistence workflows.
+- MT5 is the market data source for both CLI and UI.
+
+---
+
+## 2) Architecture Overview
 
 ```text
-app/                # CLI entrypoint
-api/                # FastAPI service layer for terminal frontend migration
-core/               # MT5 client, indicators, paper trading, shared types
-news/               # News provider abstraction + ForexFactory provider + filter
-strategy/           # Strategy interface + TrendRSI + BreakoutATR
-learning/           # Evaluator + parameter grid search optimizer
-recommendation/     # Recommendation orchestration engine
-config/             # settings.yaml
-logs/               # Runtime artifacts (e.g. paper_trade_results.jsonl)
-tests/              # Unit tests
-ui/                 # Streamlit operator dashboard (current production UI)
-frontend/next-terminal/ # Next.js scaffold for trading-terminal replacement
+app/                  CLI entrypoint and monitor/watch mode
+api/                  FastAPI scaffold for service migration
+core/                 MT5 client, indicators, shared types, paper trading
+news/                 provider abstraction + filtering
+strategy/             strategy contracts and concrete strategies
+recommendation/       orchestration engine
+learning/             validation, optimizer, persistence, unified scoring
+monitoring/           monitor runtime state + alert policy/cooldown
+notification/         Telegram notifier
+ui/                   Streamlit terminal-style operator dashboard
+config/               YAML configuration
+db/                   SQLite learning and runtime storage
+state/                active strategy and runtime state JSON files
+data/                 historical/paper/optimizer artifacts
+logs/                 cycle, alert, and learning logs
+tests/                test suite
+frontend/next-terminal/  future Next.js terminal scaffold
 ```
 
-## Streamlit Operator Dashboard (Local)
+---
 
-The project includes a premium local dashboard for manual decision support:
+## 3) Setup
 
-- Recommendation Summary with highlighted action (`BUY` / `SELL` / `NO_TRADE`)
-- Market + news gating visibility (including blocked states)
-- Strategy diagnostics and reasons
-- Recent recommendation history (persisted locally)
-- Paper-trade simulation panel and trade history
-- Strategy leaderboard based on paper-trade outcomes
-- Debug/log panel for operator troubleshooting
-- Optional watch mode for auto-monitoring + alert status visibility
-- Self-Learning Center with operator controls, state transparency, and event logs
-- Historical market ingestion from MT5 with configurable lookback ranges (days/weeks/months)
-- Unified learning scores (`historical_score`, `recent_score`, `combined_score`) and lifecycle tracking
-- Market Visuals tab with interactive professional charting (candles, overlays, sessions, news, and trade markers)
+### Prerequisites
+- Python 3.10+
+- MetaTrader 5 terminal installed and logged in
+- OS-level access to MT5 terminal process (typically Windows for live MT5 package)
 
-
-### Live Trading-Terminal Dashboard Upgrade (April 2026)
-
-The Streamlit UI now ships with a denser **trading-terminal style workspace**:
-
-- Top ticker/status strip (symbol, price, spread, session, market/news status, strategy, signal strength)
-- Left watchlist + quick symbol switching
-- Large center chart workspace with live refresh controls
-- Right intelligence panel for recommendation diagnostics
-- Bottom live panels for history, paper-trades, alerts, and learning activity
-- Compact mode + expanded chart mode
-
-#### Watch mode + live chart refresh
-
-- Use **Run cycle now** for manual update.
-- Enable **Monitor running** for continuous monitoring on an interval.
-- Enable **Auto refresh (stable scheduler)** for reliable UI reruns while monitor scheduling is handled in session state.
-- Enable **Watch mode** to evaluate/send alerts each cycle.
-- Every refresh updates recommendation, chart overlays, market/news status, watchlist snapshots, and alert/history panels.
-- Session state preserves selected symbol/timeframe and operator toggles during refresh.
-- Monitor state panel exposes running/stopped status, last refresh, next refresh, last alert time, and current cycle counter.
-- Monitor-cycle logs are persisted to `logs/ui_monitor_cycles.jsonl` for daily operations auditability.
-
-#### Current limitations vs full trading terminals
-
-- Streamlit rerun behavior can still cause partial UI redraw under frequent refresh intervals.
-- Chart interactions are strong (Plotly pan/zoom/hover), but lower-latency streaming and advanced docking layouts are limited compared with dedicated JS terminals.
-- No live order execution is implemented by design (recommendation-only, paper-trading-only scope).
-
-#### Future frontend path (FastAPI + React/Next.js)
-
-The repository now includes clearer UI data-preparation separation (`ui/terminal_view_model.py`) so the same panel payloads can be served later through a FastAPI layer and rendered by a React/Next.js terminal frontend.
-
-### Self-Learning Center (Learning Control Center)
-
-The dashboard now includes a dedicated **Self-Learning Center** tab for transparent, operator-grade monitoring of learning decisions.
-
-#### What it shows
-
-- **Active Strategies Panel**: active strategy rows with state, historical/recent score, confidence, sample size, win rate, expectancy, drawdown, and latest promotion timestamp.
-- **Candidate Strategies Panel**: strategy candidates still under evaluation, including eligibility and explicit blocking reasons.
-- **Strategy State Changes Panel**: promotion/demotion/reactivation transitions with timestamps and rationale.
-- **Historical Validation Panel**: total trades, net pnl, win rate, drawdown, profit factor, expectancy, and score (filterable).
-- **Forward Paper Trading Panel**: open/closed paper trades and recent outcomes with market/news/session/spread context columns.
-- **Learning Health Panel**: freshness and counts for optimizer, historical validation, paper updates, active/candidate/disabled strategy counts, and paper trade counts.
-- **Best Configuration per Symbol Panel**: top active parameter set per symbol with score/state context.
-- **Learning Event Log**: concise recent optimizer runs, rejections, promotions, and state transitions.
-
-#### Operator controls
-
-- Fetch Historical Data
-- Run Historical Validation
-- Run Historical Learning
-- Run Optimizer Now
-- Refresh Learning Data
-- Evaluate Open Paper Trades
-- Promote Eligible Candidates
-- Recompute Leaderboards
-- Archive Disabled Strategies (optional)
-
-#### Data population + persistence
-
-Learning Center reads/writes local-first persistence in `logs/learning/` and in the dedicated storage layer:
-
-- `data/market_history/`
-- `data/paper_trades/`
-- `data/learning/`
-- `data/optimizer/`
-- `data/snapshots/`
-- `state/`
-- `db/`
-
-Structured records use SQLite (`db/learning.sqlite3`), active strategy/symbol profiles/best params use JSON (`state/`), and candle datasets/exports use CSV/Parquet (`data/market_history/`).
-
-##### Storage layout (robust persistence)
-
-- `data/market_history/` — historical candle datasets and exports (CSV/Parquet).
-- `data/paper_trades/` — paper-trade history exports.
-- `data/learning/` — historical validation artifacts and learning datasets.
-- `data/optimizer/` — optimizer run snapshots per symbol/timeframe.
-- `data/snapshots/` — optional periodic snapshots/checkpoints.
-- `state/` — active JSON state (`active_strategy_state.json`, `open_paper_trades.json`, `learning_health.json`), symbol profiles, and best params per symbol/timeframe.
-- `db/` — SQLite structured history (`learning.sqlite3`) for recommendations, alerts, paper history, learning health, validation, optimizer results, and lifecycle events.
-
-Persistence helpers are defensive by default: missing/empty/malformed JSON/CSV/SQLite reads return schema-correct empty payloads instead of crashing. Learned behavior is persisted only through data files (SQLite/JSON/CSV/Parquet) and **never by rewriting Python source files**.
-
-Legacy learning-center CSV snapshots remain in:
-
-- `active_strategies.csv`
-- `candidate_strategies.csv`
-- `strategy_state_changes.csv`
-- `historical_validation.csv`
-- `best_configurations.csv`
-- `learning_events.csv`
-- `learning_metadata.json`
-
-If files are not present yet, the UI shows clean placeholders (for example: _No learning data yet_ and _Run optimizer or paper trading to populate this section_).
-Learning CSV loading is now crash-safe for missing, empty, or malformed files (schema-correct empty DataFrames are returned with warning logs), so the dashboard keeps running even when data has not been populated yet.
-
-### Market Visuals (Premium Charting Workstation)
-
-The dashboard includes a dedicated **Market Visuals** tab designed for manual operator analysis.
-
-#### What it shows
-
-- Interactive candlestick chart with pan/zoom
-- Fast/slow EMA overlays
-- RSI and ATR sub-panels
-- Optional breakout high/low overlays
-- Optional support/resistance overlays
-- Optional high-volatility zone highlighting
-- Recommendation markers (`BUY`/`SELL`/`NO_TRADE`) with SL/TP visual levels
-- Optional paper-trade entry/exit markers (win/loss aware colors)
-- Optional session shading (Asian / London / New York)
-- Optional news event markers (high/medium impact) with tooltips
-- Visual Trade Context panel (market price, entry zone, SL/TP distances, risk/reward, signal strength, strategy)
-
-#### Chart controls
-
-- Number of candles to display
-- Toggle EMAs
-- Toggle breakout overlays
-- Toggle recommendation markers
-- Toggle paper-trade markers
-- Toggle news markers
-- Toggle session shading
-- Toggle support/resistance overlays
-- Toggle volatility zones
-- Adjustable breakout window
-
-The chart layer reuses existing backend data sources (`MT5` candles, recommendation payload, local paper-trade logs, and news provider abstraction) and avoids duplicating decision logic in the UI.
-
-#### State meanings
-
-- `promoted`: candidate passed eligibility and was moved into active usage.
-- `stable`: active and not currently degraded.
-- `probation`: active but under closer monitoring due to recent quality/risk concerns.
-- `disabled`: removed from active usage due to repeated performance/risk violations.
-
-#### Promotion / demotion behavior
-
-- Promotion is based on candidate eligibility (sample size + quality checks).
-- Candidate eligibility explains blocking reasons explicitly (e.g., low sample size, poor expectancy, high drawdown).
-- State transitions are persisted and visible in the state change/event panels.
-
-#### How paper trading feeds learning
-
-- Paper-trade outcomes update strategy scoreboards and validation artifacts.
-- Historical validation is recomputed from paper-trade history.
-- Best symbol-level configurations are refreshed from active strategy rankings.
-- Learning health freshness uses timestamps from optimization, validation, and paper-trade updates.
-
-
-### Incremental Migration Architecture (FastAPI + Next.js)
-
-A migration-friendly service/UI split is now scaffolded so the current Streamlit dashboard can coexist with a modern frontend.
-
-#### FastAPI service domains
-
-- `GET /recommendations/latest` → latest recommendation payload
-- `GET /market/candles` → chart-ready candles from MT5
-- `GET/POST/DELETE /watchlist` → watchlist state management
-- `GET /paper-trades` → paper trade history feed
-- `GET /learning/center` → learning center health + events
-- `GET /alerts/history` → alert/audit timeline
-
-#### Next.js frontend scaffold domains
-
-- Live chart workspace (`features/charts`)
-- Watchlist (`features/watchlist`)
-- Recommendation side panel (`features/recommendations`)
-- Alerts/history panel (`features/alerts`)
-- Self-learning center (`features/learning`)
-
-#### Charting strategy for TradingView-like UX
-
-- Base charting library scaffolded with `lightweight-charts` for low-latency, production-grade candlestick rendering
-- Keep chart interactions and layout in frontend feature modules
-- Keep trading decision logic and market/news gating in backend services
-
-#### Migration plan (incremental, no Streamlit removal yet)
-
-1. **Phase 1 (Now):** keep Streamlit as primary UI, add FastAPI endpoints and Next.js skeleton.
-2. **Phase 2:** wire each Next.js feature slice to FastAPI payloads and parity-check against Streamlit panels.
-3. **Phase 3:** move advanced interactions (multi-panel docking, richer chart tools, event timelines) into Next.js.
-4. **Phase 4:** freeze Streamlit feature development, keep it as fallback operator console.
-5. **Phase 5:** make web terminal primary, retire Streamlit only after operational parity and runbook sign-off.
-
-### Run locally
-
-1. Install dependencies:
+### Install
 
 ```bash
+python -m venv .venv
+source .venv/bin/activate  # Windows: .venv\\Scripts\\activate
 pip install -r requirements.txt
 ```
 
-2. Start the dashboard from the repository root:
+### Configure
+1. Copy or edit `config/settings.yaml`.
+2. Fill MT5 terminal and account values.
+3. Optionally configure Telegram values for alert delivery.
+
+---
+
+## 4) Running the System
+
+## CLI (single recommendation)
+
+```bash
+python -m app --symbol EURUSD --timeframe M5
+```
+
+Alternative explicit module path:
+
+```bash
+python -m app.main --symbol EURUSD --timeframe M5
+```
+
+## Monitor mode (continuous loop)
+
+```bash
+python -m app --monitor --symbols EURUSD,GBPUSD,XAUUSD --timeframe M5 --interval 60
+```
+
+Notes:
+- `--monitor` is an alias for `--watch`.
+- `--cooldown` overrides alert cooldown seconds.
+- Monitor cycles are persisted to `logs/monitor_cycles.jsonl`.
+
+## Streamlit UI
 
 ```bash
 streamlit run ui/app.py
 ```
 
-> Keep MetaTrader 5 open to enable live MT5 market access. If MT5 is closed or unavailable, the dashboard will safely show `mt5_unavailable` and continue running without crashing.
+The dashboard is local and reuses the same backend engine/persistence stack.
 
-### Known runtime entrypoints
+---
 
-- **Streamlit operator dashboard**: `streamlit run ui/app.py`
-  - Primary local runtime for recommendation monitoring, watch mode, charting, alerts, and learning-center operations.
-- **CLI recommendation loop**: `python -m app.main --symbol EURUSD --timeframe M5`
-  - Lightweight local recommendation runner for non-UI operations and scripted checks.
-- **FastAPI service layer**: `uvicorn api.app:app --reload --port 8000`
-  - Migration-ready API surface for recommendations, watchlist, market candles, alerts, paper trades, and learning payloads.
+## 5) UI Overview (Operator Guide)
 
-All entrypoints are designed to degrade gracefully when MT5, local CSV/JSON files, or learning artifacts are unavailable or empty.
+Primary UI capabilities:
+- Symbol watchlist and quick switching
+- Recommendation panel (action, confidence, RR, strategy, reasons)
+- Market/news/session status strip
+- Interactive market charting (candles + overlays)
+- Paper-trade history and diagnostics
+- Alert history and suppression visibility
+- Learning center for validation/optimizer/promotions
 
+The UI can run in monitor/watch style with periodic cycles while preserving operator state in session and local files.
 
-### Run FastAPI service (new migration layer)
+---
 
-```bash
-uvicorn api.app:app --reload --port 8000
-```
+## 6) Watch Mode and Alerting
 
-### Run Next.js terminal scaffold
+Watch/monitor mode evaluates symbols at fixed intervals and applies:
+1. recommendation eligibility policy
+2. cooldown suppression
+3. duplicate alert suppression
+4. optional Telegram dispatch
 
-```bash
-cd frontend/next-terminal
-npm install
-npm run dev
-```
+Key files:
+- `logs/monitor_cycles.jsonl`
+- `logs/alert_history.jsonl`
+- `logs/alert_state.json`
+- `logs/alert_sent_history.jsonl`
 
-### Watch mode in Streamlit
+UI-specific monitor traces are written to `logs/ui_monitor_cycles.jsonl` and `logs/ui_alert_history.csv`.
 
-- Enable **Auto Refresh** to run recurring cycles.
-- Enable **Watch Mode (Alerts)** to evaluate/send Telegram alerts for strong opportunities only.
-- Configure refresh interval from the sidebar.
-- Dashboard now shows:
-  - current monitoring state (`running`/`idle`)
-  - latest alert status (`sent`, `suppressed`, `failed`, `not_evaluated`)
-  - latest alert reason and alert history table
+---
 
-### Telegram alert setup (practical operator mode)
+## 7) Historical Learning and Validation
 
-Alerts are intentionally strict and only fire when all of these conditions pass:
+Learning is split into transparent local workflows:
+- historical data ingestion from MT5 candles
+- historical validation reports
+- optimizer runs (grid/randomized search)
+- unified scorer combining historical and forward-paper performance
+- candidate promotion/demotion lifecycle tracking
 
-- market is `open`
-- news gate is not `blocked`
-- action is `BUY` or `SELL`
-- signal strength is at least `strong`
-- confidence >= `monitoring.minimum_confidence_for_alert`
-- risk/reward >= `recommendation.min_risk_reward`
+These pipelines are for **strategy ranking and recommendation quality** only.
 
-Suppression controls:
+---
 
-- `monitoring.alert_cooldown_seconds`: suppress repeat alerts by symbol/timeframe/action.
-- `monitoring.alert_duplicate_window_seconds`: suppress near-identical setups using persisted signal fingerprints.
-- Alert history is persisted in JSONL/CSV logs so suppression state survives process restarts.
+## 8) Self-Learning Loop
 
-#### Configuration in `config/settings.yaml`
+The self-learning loop in this beta is **bounded and operator-driven**:
+- update data
+- run validation/optimizer
+- score candidates
+- promote/demote with explicit metrics and state history
 
-```yaml
-monitoring:
-  alert_cooldown_seconds: 900
-  alert_duplicate_window_seconds: 1800
-  send_rejected_alerts: false
-  minimum_signal_strength_for_alert: strong
-  minimum_confidence_for_alert: 0.6
-  telegram:
-    enabled: false
-    bot_token: ""
-    chat_id: ""
-    timeout_seconds: 10
-```
+No source code rewriting is used for learning state; state is persisted in structured local storage.
 
-#### Environment variable overrides
+---
 
-- `TELEGRAM_ENABLED=1`
-- `TELEGRAM_BOT_TOKEN=...`
-- `TELEGRAM_CHAT_ID=...`
-- `TELEGRAM_TIMEOUT_SECONDS=10`
-- `TELEGRAM_SEND_REJECTED_ALERTS=false` (optional, default `false`)
-- `TELEGRAM_SEND_SUMMARY_ALERTS=false` (optional, default `false`)
+## 9) Telegram Alerts
 
-Rejected-signal alerts are optional and disabled by default for operator signal quality.
+Telegram integration is optional and used for operator notifications.
 
-### Status meanings in the dashboard
+Typical setup (via `settings.yaml`):
+- `telegram.enabled`
+- `telegram.bot_token`
+- `telegram.chat_id`
+- alert behavior flags (including rejected-signal notifications)
 
-`market_status`:
-- `open`: Symbol is tradable and has recent market activity.
-- `closed`: Market/session appears closed; recommendation is forced to `NO_TRADE`.
-- `unavailable`: Symbol is missing/not tradable in MT5.
-- `mt5_unavailable`: MT5 package or terminal is not reachable.
+If Telegram is disabled/misconfigured, recommendation generation still works locally.
 
-`mt5_connection_status`:
-- `connected`: MT5 initialize succeeded for the current cycle.
-- `unavailable`: MT5 initialize failed for the current cycle.
+---
 
-The dashboard top cards and the recommendation output now use the same backend recommendation payload as the single source of truth (including `market_status` and `mt5_connection_status`).
+## 10) Storage Layout
 
-`news_status`:
-- `clear`: No blocking event in effect.
-- `blocked`: High-impact event blocks trading; action is forced to `NO_TRADE`.
-- `reduced_confidence`: News risk exists, recommendation remains but with lower confidence.
-- `unknown`: News provider failed or returned uncertain state.
+Persistent data locations:
+- `data/market_history/` – market candle datasets
+- `data/paper_trades/` – paper-trade exports
+- `data/learning/` – learning and validation artifacts
+- `data/optimizer/` – optimizer result snapshots
+- `data/snapshots/` – optional checkpoints
+- `state/` – active runtime and strategy state JSON
+- `db/` – SQLite database (`learning.sqlite3`)
+- `logs/` – monitor cycles, alerts, and diagnostics
 
-## News Layer
+---
 
-- `core.types.NewsEvent` is the normalized event model with:
-  `event_id`, `title`, `currency`, `impact`, `event_time`, `actual`,
-  `forecast`, `previous`, and `source`.
-- `news.base.NewsProvider` defines the provider contract.
-- `news.providers.build_news_provider(...)` resolves providers from settings
-  (`forexfactory`, `none`), making the data source replaceable.
-- `news.filter.NewsFilter` produces one of:
-  - `block trading`
-  - `reduce confidence`
-  - `allow trading`
-- `news.symbols.currencies_for_symbol(...)` maps symbol relevance by config
-  (`news.symbols_map`) with a fallback split (e.g. `EURUSD -> EUR, USD`).
-- If a provider is unavailable, the engine logs warnings and continues safely
-  with no news events instead of crashing.
-## Paper Trading + Evaluation
+## 11) Tests
 
-- `core.paper_trading.PaperTrader` simulates opening and closing paper trades using
-  entry/SL/TP logic over lookahead candles.
-- Trade records include:
-  `entry`, `exit_price`, `stop_loss`, `take_profit`, `side`, `open_time`,
-  `close_time`, `outcome`, and `pnl`.
-- `core.paper_trading.TradeStore` saves structured paper trades to:
-  - CSV (`save_csv`)
-  - SQLite (`save_sqlite`)
-- `learning.evaluator.PerformanceEvaluator` builds a strategy leaderboard with:
-  - total trades
-  - win rate
-  - loss rate
-  - net pnl
-  - average pnl
-  - max drawdown
-  - profit factor
-  - expectancy
-- Leaderboard excludes strategies that have too few trades (`min_trades`) or too
-  much drawdown (`max_drawdown_limit`).
-
-
-## Self-Optimization Layer
-
-- `learning.optimizer.ParameterOptimizer` supports `grid` and `randomized` parameter search.
-- Each parameter set is evaluated using three stages:
-  - training window
-  - validation window
-  - forward (paper-like) window
-- Final ranking uses a robustness score weighted toward validation and forward performance, with an explicit overfitting penalty (`|train - validation|`).
-- The optimizer stores top parameter candidates and writes JSON reports to `learning.optimization_report_dir` (default: `logs/optimization`).
-- After each optimization cycle, only the best 2-3 strategies are activated (`learning.active_strategy_count`).
-- Reports include the winning parameter sets and rationale for why they were selected.
-- Optimizer results are persisted per symbol and per strategy (e.g. `trend_rsi_EURUSD_optimization_report.json`) and a shared registry (`best_params_by_symbol.json`) so EURUSD winners are never treated as globally optimal for XAUUSD.
-
-## Per-Symbol Intelligence and Market Tuning
-
-- The engine now loads a symbol profile from `recommendation.symbol_profiles` in `config/settings.yaml`.
-- Each profile can tune:
-  - preferred timeframes
-  - min confidence / min risk-reward
-  - ATR low/high/extreme thresholds
-  - spread thresholds
-  - preferred sessions + outside-session policy (`reduce` or `block`)
-  - news sensitivity (currency mapping, block/reduce windows)
-  - per-symbol optimizer ranges via `learning.symbol_parameter_grid`
-- Supported presets in the default config: `EURUSD`, `GBPUSD`, `USDJPY`, `XAUUSD`, `GBPJPY`.
-
-### Session-aware behavior
-
-- Engine detects UTC session state (`asian`, `london`, `new_york`, and overlap states).
-- Per-symbol profiles define preferred sessions.
-- Outside preferred sessions:
-  - either confidence is reduced, or
-  - trading is blocked (profile policy).
-
-### Spread-aware behavior
-
-- MT5 spread is read per symbol when available.
-- Output now includes:
-  - `spread_state` (`normal`, `elevated`, `excessive`)
-  - `spread_value`
-- Excessive spread triggers explicit rejection before final action.
-
-### News timing per symbol
-
-- Next relevant event is symbol-aware and based on configured currencies.
-- Output includes:
-  - `next_relevant_news_event`
-  - `next_relevant_news_countdown`
-- You can customize block/reduce windows by symbol profile.
-
-### Adding a new symbol profile
-
-1. Add `news.symbols_map.<SYMBOL>` currencies (or use `news_sensitivity.currencies` in profile).
-2. Add `recommendation.symbol_profiles.<SYMBOL>` with risk/session/spread/news tuning.
-3. (Optional) Add `learning.symbol_parameter_grid.<SYMBOL>` with strategy-specific optimization ranges.
-4. Run tests and validate the profile in CLI or Streamlit dashboard.
-
-## Market Status Behavior
-
-- The recommendation engine checks market tradability *before* generating strategy output.
-- Market status is attached to every final response via `market_status` with values:
-  - `open` → normal strategy/news flow continues.
-  - `closed` → engine returns `NO_TRADE` and neutralized entry/SL/TP/confidence values.
-  - `unavailable` → symbol is missing or not tradable in MT5, returns `NO_TRADE`.
-  - `mt5_unavailable` → MT5 package/terminal is unavailable, returns `NO_TRADE`.
-- Terminal output now prints **Market Status** near the top so the operator sees session availability before reviewing strategy details.
-- MT5 initialization includes safe retry behavior (up to 3 attempts with short delay by default).
-- MT5 terminal path and login options can be configured in `config/settings.yaml` under `mt5.*` (`terminal_path`, `login`, `password`, `server`, retry settings).
-
-## Monitor Mode + Telegram Alerts
-
-### Configuration (`config/settings.yaml`)
-
-```yaml
-monitoring:
-  interval_seconds: 300
-  alert_cooldown_seconds: 900
-  send_rejected_alerts: false
-  send_summary_alerts: false
-  minimum_signal_strength_for_alert: strong
-  minimum_confidence_for_alert: 0.6
-  symbols: [EURUSD, GBPUSD, USDJPY]
-  telegram:
-    enabled: false
-    bot_token: ""
-    chat_id: ""
-    timeout_seconds: 10
-```
-
-### Enable Telegram alerts
-
-You can configure credentials in YAML or via environment variables:
-
-- `TELEGRAM_BOT_TOKEN`
-- `TELEGRAM_CHAT_ID`
-
-Alerts are **best-effort**: failures are logged and never crash monitoring cycles.
-If Telegram is enabled but credentials are missing, the monitor safely returns `telegram_not_configured` and continues.
-
-### Run monitor mode from CLI
-
-Single symbol:
+Run all tests:
 
 ```bash
-python -m app.main --symbol EURUSD --monitor --interval 300
+pytest -q
 ```
 
-Multi-symbol:
+If your environment lacks optional test dependencies, install from `requirements.txt` and retry.
 
-```bash
-python -m app.main --symbols EURUSD,GBPUSD,USDJPY --monitor --interval 300
-```
+---
 
-Optional override cooldown:
+## 12) Known Limitations (Beta)
 
-```bash
-python -m app.main --symbols EURUSD,GBPUSD --monitor --cooldown 1200
-```
+- MT5 package/runtime availability is environment dependent.
+- Strategy set is intentionally conservative and starter-grade.
+- Streamlit rerun model can be less smooth than dedicated JS terminals under very short refresh intervals.
+- API layer is scaffolded but not yet the primary runtime path.
+- No live trading execution by design.
 
-### Alert qualification policy (strong opportunities only)
+---
 
-Alerts are sent only when all conditions pass:
-- market is open
-- news is not blocked
-- action is `BUY` or `SELL`
-- signal strength is `strong`
-- confidence >= configured minimum
-- risk/reward >= configured minimum
+## 13) Roadmap
 
-Duplicate alerts are suppressed with per-`symbol + timeframe + direction` cooldown.
+### A) FastAPI service layer hardening
+- complete endpoint parity with Streamlit panels
+- formal response schemas and versioning
+- background task scheduling and health endpoints
 
-Optional rejected-signal alerts (disabled by default) can report concise reasons for:
-- market closed
-- news blocking
-- spread/session/quality filters
-- low confidence / low risk-reward
+### B) React/Next.js frontend
+- migrate operator panels to the Next.js terminal scaffold
+- add richer chart interactions and panel docking
+- consume FastAPI payloads with auth/session boundaries
 
-### Telegram message example
+### C) Trading-terminal migration
+- run Streamlit and web terminal in parallel during parity phase
+- promote web terminal after runbook and operational sign-off
+- keep Streamlit as fallback console during transition
 
-```text
-📌 Trading Recommendation Alert
+---
 
-Instrument
-- Symbol: EURUSD
-- Timeframe: M5
-- Action: BUY
+## 14) Release Readiness Checklist
 
-Signal Quality
-- Signal Strength: strong
-- Confidence: 78.00%
-- Risk/Reward: 2.10
-- Strategy: trend_rsi
-...
-```
-
-### Cooldown behavior
-
-- A cooldown marker is stored after every sent strong alert.
-- On the next cycle, matching keys (`symbol:timeframe:action`) are suppressed until `alert_cooldown_seconds` elapses.
-- Suppression reasons are persisted to alert history logs for operations/auditing.
-
-### Monitoring persistence
-
-Monitoring writes local logs to:
-- `logs/monitor_cycles.jsonl` (cycle + recommendation + suppression reason)
-- `logs/alert_history.jsonl` (alert outcomes)
-- `logs/alert_state.json` (cooldown state)
+- [x] Local-first architecture
+- [x] Recommendation-only scope
+- [x] Paper-trading-only execution model
+- [x] CLI + monitor + Streamlit entrypoints documented
+- [x] Tests runnable in a fully provisioned Python environment
+- [x] Storage/logging paths defined for operations

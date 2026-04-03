@@ -10,14 +10,14 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from config_loader import load_settings
+from config_loader import Settings, load_settings
 from core.mt5_client import MT5Client
 from learning.optimizer import ParameterOptimizer
 from logs.logger import configure_logging
 from monitoring.alerts import AlertCooldownStore, AlertHistoryStore, AlertPolicy
 from news.filter import NewsFilter
 from news.providers import build_news_provider
-from notification.telegram_notifier import TelegramConfig, TelegramNotifier
+from notification.telegram_notifier import TelegramNotifier
 from recommendation.engine import RecommendationEngine
 from strategy.registry import create_default_strategies
 
@@ -26,6 +26,12 @@ MONITOR_LOG_PATH = Path("logs/monitor_cycles.jsonl")
 ALERT_LOG_PATH = Path("logs/alert_history.jsonl")
 ALERT_STATE_PATH = Path("logs/alert_state.json")
 ALERT_SENT_HISTORY_PATH = Path("logs/alert_sent_history.jsonl")
+
+
+def _settings_get(settings: Any, key: str, default: Any) -> Any:
+    if hasattr(settings, "get"):
+        return settings.get(key, default)
+    return default
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -206,35 +212,37 @@ def _build_telegram_notifier(settings: Any) -> TelegramNotifier:
     return TelegramNotifier.from_settings(settings)
 
 
-def run(engine: RecommendationEngine, args: argparse.Namespace, settings: Any | None = None) -> None:
+def run(engine: RecommendationEngine, args: argparse.Namespace, settings: Settings | dict[str, Any] | None = None) -> None:
     interval = max(1, int(args.interval))
     settings = settings or {}
     watch_mode = bool(args.watch or getattr(args, "monitor", False))
     symbols = _resolve_symbols(args, settings)
     cycle = 1
 
-    min_confidence = (
-        float(settings.get("monitoring.minimum_confidence_for_alert", settings.get("recommendation.min_confidence", 0.6)))
-        if hasattr(settings, "get")
-        else 0.6
+    min_confidence = float(
+        _settings_get(
+            settings,
+            "monitoring.minimum_confidence_for_alert",
+            _settings_get(settings, "recommendation.min_confidence", 0.6),
+        )
     )
-    min_rr = float(settings.get("recommendation.min_risk_reward", 1.5)) if hasattr(settings, "get") else 1.5
+    min_rr = float(_settings_get(settings, "recommendation.min_risk_reward", 1.5))
     policy = AlertPolicy(
         min_confidence=min_confidence,
         min_risk_reward=min_rr,
-        min_signal_strength=str(
-            settings.get("monitoring.minimum_signal_strength_for_alert", "strong")
-        ) if hasattr(settings, "get") else "strong",
+        min_signal_strength=str(_settings_get(settings, "monitoring.minimum_signal_strength_for_alert", "strong")),
     )
 
-    configured_cooldown = int(settings.get("monitoring.alert_cooldown_seconds", 900)) if hasattr(settings, "get") else 900
+    configured_cooldown = int(_settings_get(settings, "monitoring.alert_cooldown_seconds", 900))
     cooldown_seconds = int(args.cooldown) if args.cooldown is not None else configured_cooldown
     cooldown_store = AlertCooldownStore(ALERT_STATE_PATH, cooldown_seconds=cooldown_seconds)
     history_store = AlertHistoryStore(
         ALERT_SENT_HISTORY_PATH,
-        duplicate_window_seconds=int(settings.get("monitoring.alert_duplicate_window_seconds", 1800)) if hasattr(settings, "get") else 1800,
+        duplicate_window_seconds=int(
+            _settings_get(settings, "monitoring.alert_duplicate_window_seconds", 1800)
+        ),
     )
-    notifier = _build_telegram_notifier(settings) if hasattr(settings, "get") else TelegramNotifier(TelegramConfig())
+    notifier = _build_telegram_notifier(settings)
 
     while True:
         for symbol in symbols:
@@ -250,7 +258,8 @@ def run(engine: RecommendationEngine, args: argparse.Namespace, settings: Any | 
                 is_news_blocked = recommendation.news_status == "blocked"
                 print(f"Trading blocked by news: {'yes' if is_news_blocked else 'no'}")
 
-                if recommendation.action != "NO_TRADE":
+                action = getattr(recommendation.action, "value", recommendation.action)
+                if action != "NO_TRADE":
                     print(engine.format_for_terminal(recommendation))
                 else:
                     print("No actionable recommendation this cycle.")
