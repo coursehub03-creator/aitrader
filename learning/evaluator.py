@@ -70,6 +70,12 @@ class PerformanceEvaluator:
 
         return sorted(scores, key=lambda item: item.score, reverse=True)
 
+    def leaderboard_by_symbol(self, results: list[PaperTradeResult]) -> dict[str, list[StrategyScore]]:
+        grouped: dict[str, list[PaperTradeResult]] = defaultdict(list)
+        for result in results:
+            grouped[result.symbol].append(result)
+        return {symbol: self.leaderboard(items) for symbol, items in grouped.items()}
+
     @staticmethod
     def save_leaderboard_csv(scores: list[StrategyScore], output_path: str | Path) -> None:
         frame = pd.DataFrame(

@@ -130,6 +130,7 @@ class ParameterOptimizer:
         selected_candidates = ranked[:top_n]
         best = selected_candidates[0]
         report_path = self._save_report(strategy.name, symbol, selected_candidates, len(combos))
+        self._update_symbol_best_registry(strategy.name, symbol, best.params, best.robustness_score)
 
         return OptimizationResult(
             strategy_name=strategy.name,
@@ -140,6 +141,22 @@ class ParameterOptimizer:
             selected_candidates=selected_candidates,
             report_path=str(report_path),
         )
+
+    def _update_symbol_best_registry(
+        self,
+        strategy_name: str,
+        symbol: str,
+        best_params: dict[str, Any],
+        best_score: float,
+    ) -> None:
+        registry_path = self.report_dir / "best_params_by_symbol.json"
+        if registry_path.exists():
+            payload = json.loads(registry_path.read_text(encoding="utf-8"))
+        else:
+            payload = {}
+        payload.setdefault(symbol, {})
+        payload[symbol][strategy_name] = {"best_params": best_params, "best_score": float(best_score)}
+        registry_path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
 
     def _evaluate_split(
         self,

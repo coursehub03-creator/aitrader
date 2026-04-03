@@ -78,6 +78,10 @@ def _recommendation_to_dict(recommendation: Any) -> dict[str, Any]:
         "market_status": recommendation.market_status,
         "mt5_connection_status": getattr(recommendation, "mt5_connection_status", "unknown"),
         "news_status": recommendation.news_status,
+        "symbol_profile": getattr(recommendation, "symbol_profile", "default"),
+        "session_state": getattr(recommendation, "session_state", "unknown"),
+        "spread_state": getattr(recommendation, "spread_state", "unknown"),
+        "spread_value": getattr(recommendation, "spread_value", 0.0),
         "selected_strategy": recommendation.selected_strategy,
         "action": action,
         "entry": recommendation.entry,
@@ -88,7 +92,8 @@ def _recommendation_to_dict(recommendation: Any) -> dict[str, Any]:
         "signal_strength": getattr(recommendation, "signal_strength", "weak"),
         "rejection_reason": getattr(recommendation, "rejection_reason", None),
         "volatility_state": getattr(recommendation, "volatility_state", "normal"),
-        "next_news_event": getattr(recommendation, "next_news_event", None),
+        "next_relevant_news_event": getattr(recommendation, "next_relevant_news_event", None),
+        "next_relevant_news_countdown": getattr(recommendation, "next_relevant_news_countdown", None),
         "reasons": recommendation.reasons,
     }
 

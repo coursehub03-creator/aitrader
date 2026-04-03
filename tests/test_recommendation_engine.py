@@ -8,6 +8,7 @@ from core.types import SignalAction, StrategyScore, StrategySignal
 from news.filter import NewsFilter
 from learning.optimizer import OptimizationResult
 from recommendation.engine import RecommendationEngine
+from recommendation.symbol_profile import profile_for_symbol
 
 
 @dataclass
@@ -123,7 +124,10 @@ def test_news_gate_returns_unknown_when_provider_fails() -> None:
             raise RuntimeError("provider down")
 
     engine.news_provider = _BoomProvider()
-    blocked, news_status, reason, confidence_multiplier, next_event = engine._news_gate("EURUSD")
+    blocked, news_status, reason, confidence_multiplier, next_event = engine._news_gate(
+        "EURUSD",
+        profile_for_symbol("EURUSD", type("S", (), {"get": lambda self, key, default=None: {"recommendation.symbol_profiles": {}}.get(key, default)})()),
+    )
 
     assert blocked is False
     assert news_status == "unknown"
@@ -280,12 +284,16 @@ def test_final_recommendation_has_operator_output_fields() -> None:
         "selected_strategy",
         "market_status",
         "news_status",
+        "symbol_profile",
         "spread_state",
+        "spread_value",
         "session_state",
         "mt5_connection_status",
         "signal_strength",
         "rejection_reason",
         "volatility_state",
+        "next_relevant_news_event",
+        "next_relevant_news_countdown",
         "next_news_event",
         "reasons",
         "timestamp",
@@ -413,7 +421,10 @@ def test_news_gate_blocks_when_high_impact_within_30_minutes() -> None:
             ]
 
     engine.news_provider = _Provider()
-    blocked, status, _, _, next_event = engine._news_gate("EURUSD")
+    blocked, status, _, _, next_event = engine._news_gate(
+        "EURUSD",
+        type("P", (), {"news_sensitivity": {}})(),
+    )
 
     assert blocked is True
     assert status == "blocked"

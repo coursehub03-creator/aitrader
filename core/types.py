@@ -101,12 +101,16 @@ class FinalRecommendation:
     selected_strategy: str
     market_status: str
     news_status: str
+    symbol_profile: str = "default"
     spread_state: str = "unknown"
+    spread_value: float = 0.0
     session_state: str = "unknown"
     mt5_connection_status: str = "unknown"
     signal_strength: str = "weak"
     rejection_reason: str | None = None
     volatility_state: str = "normal"
+    next_relevant_news_event: dict[str, Any] | None = None
+    next_relevant_news_countdown: str | None = None
     next_news_event: dict[str, Any] | None = None
     reasons: list[str] = field(default_factory=list)
     timestamp: datetime = field(default_factory=datetime.utcnow)

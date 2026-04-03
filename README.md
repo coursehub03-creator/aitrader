@@ -152,6 +152,51 @@ The dashboard top cards and the recommendation output now use the same backend r
 - The optimizer stores top parameter candidates and writes JSON reports to `learning.optimization_report_dir` (default: `logs/optimization`).
 - After each optimization cycle, only the best 2-3 strategies are activated (`learning.active_strategy_count`).
 - Reports include the winning parameter sets and rationale for why they were selected.
+- Optimizer results are persisted per symbol and per strategy (e.g. `trend_rsi_EURUSD_optimization_report.json`) and a shared registry (`best_params_by_symbol.json`) so EURUSD winners are never treated as globally optimal for XAUUSD.
+
+## Per-Symbol Intelligence and Market Tuning
+
+- The engine now loads a symbol profile from `recommendation.symbol_profiles` in `config/settings.yaml`.
+- Each profile can tune:
+  - preferred timeframes
+  - min confidence / min risk-reward
+  - ATR low/high/extreme thresholds
+  - spread thresholds
+  - preferred sessions + outside-session policy (`reduce` or `block`)
+  - news sensitivity (currency mapping, block/reduce windows)
+  - per-symbol optimizer ranges via `learning.symbol_parameter_grid`
+- Supported presets in the default config: `EURUSD`, `GBPUSD`, `USDJPY`, `XAUUSD`, `GBPJPY`.
+
+### Session-aware behavior
+
+- Engine detects UTC session state (`asian`, `london`, `new_york`, and overlap states).
+- Per-symbol profiles define preferred sessions.
+- Outside preferred sessions:
+  - either confidence is reduced, or
+  - trading is blocked (profile policy).
+
+### Spread-aware behavior
+
+- MT5 spread is read per symbol when available.
+- Output now includes:
+  - `spread_state` (`normal`, `elevated`, `excessive`)
+  - `spread_value`
+- Excessive spread triggers explicit rejection before final action.
+
+### News timing per symbol
+
+- Next relevant event is symbol-aware and based on configured currencies.
+- Output includes:
+  - `next_relevant_news_event`
+  - `next_relevant_news_countdown`
+- You can customize block/reduce windows by symbol profile.
+
+### Adding a new symbol profile
+
+1. Add `news.symbols_map.<SYMBOL>` currencies (or use `news_sensitivity.currencies` in profile).
+2. Add `recommendation.symbol_profiles.<SYMBOL>` with risk/session/spread/news tuning.
+3. (Optional) Add `learning.symbol_parameter_grid.<SYMBOL>` with strategy-specific optimization ranges.
+4. Run tests and validate the profile in CLI or Streamlit dashboard.
 
 ## Market Status Behavior
 

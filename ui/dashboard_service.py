@@ -100,6 +100,10 @@ class DashboardService:
             "market_status": recommendation.market_status,
             "mt5_connection_status": recommendation.mt5_connection_status,
             "news_status": recommendation.news_status,
+            "symbol_profile": recommendation.symbol_profile,
+            "session_state": recommendation.session_state,
+            "spread_state": recommendation.spread_state,
+            "spread_value": recommendation.spread_value,
             "selected_strategy": recommendation.selected_strategy,
             "action": action,
             "entry": recommendation.entry,
@@ -110,7 +114,8 @@ class DashboardService:
             "signal_strength": recommendation.signal_strength,
             "rejection_reason": recommendation.rejection_reason or "",
             "volatility_state": recommendation.volatility_state,
-            "next_news_event": json.dumps(recommendation.next_news_event or {}),
+            "next_relevant_news_event": json.dumps(recommendation.next_relevant_news_event or {}),
+            "next_relevant_news_countdown": recommendation.next_relevant_news_countdown or "",
             "reasons": " | ".join(recommendation.reasons),
         }
 
@@ -333,6 +338,19 @@ class DashboardService:
         if not scores:
             return pd.DataFrame()
         return pd.DataFrame([asdict(score) for score in scores])
+
+    def strategy_leaderboard_by_symbol(self, min_trades: int = 1, max_drawdown_limit: float = 999.0) -> pd.DataFrame:
+        trades_frame = self.load_paper_trades(limit=5000)
+        if trades_frame.empty:
+            return pd.DataFrame()
+        trades = [self._row_to_trade_result(row) for _, row in trades_frame.iloc[::-1].iterrows()]
+        evaluator = PerformanceEvaluator(min_trades=min_trades, max_drawdown_limit=max_drawdown_limit)
+        per_symbol = evaluator.leaderboard_by_symbol(trades)
+        rows: list[dict[str, Any]] = []
+        for symbol, scores in per_symbol.items():
+            for score in scores:
+                rows.append({"symbol": symbol, **asdict(score)})
+        return pd.DataFrame(rows)
 
     def _build_mt5_client(self) -> MT5Client:
         return MT5Client(

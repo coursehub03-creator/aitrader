@@ -276,6 +276,29 @@ class MT5Client:
         """Fetch OHLCV data for multiple timeframes."""
         return {tf.upper(): self.fetch_rates(symbol, tf, bars) for tf in timeframes}
 
+    def get_spread(self, symbol: str) -> float:
+        """Return current symbol spread in points when available."""
+        if mt5 is None or not self.connected:
+            return 0.0
+        if not self.ensure_symbol_selected(symbol):
+            return 0.0
+        try:
+            info = mt5.symbol_info(symbol)
+            if info is None:
+                return 0.0
+            spread = float(getattr(info, "spread", 0.0) or 0.0)
+            if spread > 0:
+                return spread
+            tick = mt5.symbol_info_tick(symbol)
+            point = float(getattr(info, "point", 0.0) or 0.0)
+            bid = float(getattr(tick, "bid", 0.0) or 0.0) if tick is not None else 0.0
+            ask = float(getattr(tick, "ask", 0.0) or 0.0) if tick is not None else 0.0
+            if point > 0 and bid > 0 and ask > 0:
+                return max(0.0, (ask - bid) / point)
+        except Exception as exc:  # pragma: no cover
+            LOGGER.debug("Could not fetch spread for %s: %s", symbol, exc)
+        return 0.0
+
     @staticmethod
     def now() -> datetime:
         return datetime.utcnow()

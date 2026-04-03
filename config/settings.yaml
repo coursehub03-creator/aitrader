@@ -21,6 +21,7 @@ news:
     GBPUSD: [GBP, USD]
     USDJPY: [USD, JPY]
     XAUUSD: [USD, MACRO]
+    GBPJPY: [GBP, JPY]
 
 strategy:
   trend_rsi:
@@ -60,10 +61,89 @@ learning:
       breakout_lookback: [15, 20, 30]
       atr_sl_multiplier: [1.0, 1.5, 2.0]
       atr_tp_multiplier: [2.0, 2.5, 3.0]
+  symbol_parameter_grid:
+    EURUSD:
+      trend_rsi:
+        ema_fast: [10, 20]
+    XAUUSD:
+      breakout_atr:
+        atr_sl_multiplier: [1.5, 2.0, 2.5]
+        atr_tp_multiplier: [2.5, 3.0, 3.5]
 
 recommendation:
   min_confidence: 0.6
   min_risk_reward: 1.5
+  spread:
+    default_threshold: 25
+    elevated_ratio: 0.75
+  symbol_profiles:
+    DEFAULT:
+      preferred_timeframes: [M5, M15, H1]
+      min_confidence: 0.6
+      min_risk_reward: 1.5
+      atr_low_threshold: 0.0005
+      atr_high_threshold: 0.005
+      atr_extreme_threshold: 0.0075
+      spread_threshold: 25
+      preferred_sessions: [london, new_york, london_newyork_overlap]
+      session_outside_policy: reduce
+      session_confidence_multiplier: 0.8
+      news_sensitivity:
+        block_before_min: 30
+        reduce_before_min: 60
+        reduce_confidence_multiplier: 0.75
+    EURUSD:
+      name: eurusd_major
+      preferred_timeframes: [M5, M15, H1]
+      spread_threshold: 18
+      preferred_sessions: [london, new_york, london_newyork_overlap]
+      news_sensitivity:
+        currencies: [EUR, USD]
+        block_before_min: 40
+        reduce_before_min: 90
+        reduce_confidence_multiplier: 0.7
+    GBPUSD:
+      name: gbpusd_pulse
+      preferred_timeframes: [M5, M15, H1]
+      spread_threshold: 22
+      preferred_sessions: [london, london_newyork_overlap]
+      news_sensitivity:
+        currencies: [GBP, USD]
+        block_before_min: 40
+        reduce_before_min: 75
+    USDJPY:
+      name: usdjpy_session_shift
+      preferred_timeframes: [M5, M15, H1]
+      spread_threshold: 20
+      preferred_sessions: [asian, london, asian_london_overlap]
+      news_sensitivity:
+        currencies: [USD, JPY]
+        block_before_min: 30
+        reduce_before_min: 60
+    XAUUSD:
+      name: xauusd_macro_volatility
+      preferred_timeframes: [M5, M15, H1, H4]
+      min_confidence: 0.65
+      min_risk_reward: 1.7
+      spread_threshold: 35
+      atr_high_threshold: 0.007
+      preferred_sessions: [london, new_york, london_newyork_overlap]
+      session_outside_policy: block
+      news_sensitivity:
+        currencies: [USD, MACRO]
+        block_before_min: 60
+        reduce_before_min: 120
+        reduce_confidence_multiplier: 0.65
+    GBPJPY:
+      name: gbpjpy_cross_aggressive
+      preferred_timeframes: [M5, M15]
+      min_confidence: 0.62
+      spread_threshold: 30
+      preferred_sessions: [asian, london, asian_london_overlap]
+      news_sensitivity:
+        currencies: [GBP, JPY]
+        block_before_min: 35
+        reduce_before_min: 80
   volatility:
     atr_period: 14
     low_atr_pct: 0.0005
