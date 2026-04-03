@@ -23,6 +23,7 @@ class _FakeRecommendation:
         self.take_profit = 1.12
         self.confidence = 0.7
         self.risk_reward = 2.0
+        self.signal_strength = "strong"
         self.reasons = ["test reason"]
 
 
@@ -54,10 +55,12 @@ def test_build_parser_accepts_watch_and_interval() -> None:
 
 def test_run_single_cycle_persists_log(tmp_path, monkeypatch, capsys) -> None:
     monkeypatch.setattr(cli, "MONITOR_LOG_PATH", tmp_path / "monitor.jsonl")
+    monkeypatch.setattr(cli, "ALERT_LOG_PATH", tmp_path / "alerts.jsonl")
+    monkeypatch.setattr(cli, "ALERT_STATE_PATH", tmp_path / "state.json")
     engine = _FakeEngine([_FakeRecommendation(action="BUY", market_status="open", news_status="blocked")])
-    args = argparse.Namespace(symbol="EURUSD", timeframe="M5", watch=False, interval=300)
+    args = argparse.Namespace(symbol="EURUSD", symbols=None, timeframe="M5", watch=False, monitor=False, interval=300, cooldown=None)
 
-    cli.run(engine, args)
+    cli.run(engine, args, settings={})
 
     output = capsys.readouterr().out
     assert "Market status: open" in output
@@ -69,10 +72,13 @@ def test_run_single_cycle_persists_log(tmp_path, monkeypatch, capsys) -> None:
     payload = json.loads(lines[0])
     assert payload["cycle"] == 1
     assert payload["recommendation"]["action"] == "BUY"
+    assert payload["alert_status"] == "suppressed"
 
 
 def test_run_watch_mode_retries_after_failure(tmp_path, monkeypatch, capsys) -> None:
     monkeypatch.setattr(cli, "MONITOR_LOG_PATH", tmp_path / "monitor.jsonl")
+    monkeypatch.setattr(cli, "ALERT_LOG_PATH", tmp_path / "alerts.jsonl")
+    monkeypatch.setattr(cli, "ALERT_STATE_PATH", tmp_path / "state.json")
 
     sleep_calls = {"count": 0}
 
@@ -84,13 +90,13 @@ def test_run_watch_mode_retries_after_failure(tmp_path, monkeypatch, capsys) -> 
     monkeypatch.setattr(cli.time, "sleep", _sleep)
 
     engine = _FakeEngine([RuntimeError("mt5 disconnected"), _FakeRecommendation(action="NO_TRADE", market_status="mt5_unavailable")])
-    args = argparse.Namespace(symbol="EURUSD", timeframe="M5", watch=True, interval=1)
+    args = argparse.Namespace(symbol="EURUSD", symbols=None, timeframe="M5", watch=True, monitor=False, interval=1, cooldown=None)
 
     with pytest.raises(KeyboardInterrupt):
-        cli.run(engine, args)
+        cli.run(engine, args, settings={})
 
     output = capsys.readouterr().out
-    assert "Cycle 1 failed" in output
+    assert "Cycle 1 failed for EURUSD" in output
     assert "Market status: mt5_unavailable" in output
 
     lines = (tmp_path / "monitor.jsonl").read_text(encoding="utf-8").strip().splitlines()

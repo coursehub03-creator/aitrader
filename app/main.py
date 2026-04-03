@@ -5,8 +5,9 @@ from __future__ import annotations
 import argparse
 import json
 import logging
+import os
 import time
-from datetime import timezone
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -14,13 +15,17 @@ from config_loader import load_settings
 from core.mt5_client import MT5Client
 from learning.optimizer import ParameterOptimizer
 from logs.logger import configure_logging
+from monitoring.alerts import AlertPolicy, AlertCooldownStore
 from news.filter import NewsFilter
 from news.providers import build_news_provider
+from notification.telegram_notifier import TelegramConfig, TelegramNotifier
 from recommendation.engine import RecommendationEngine
 from strategy.registry import create_default_strategies
 
 LOGGER = logging.getLogger(__name__)
 MONITOR_LOG_PATH = Path("logs/monitor_cycles.jsonl")
+ALERT_LOG_PATH = Path("logs/alert_history.jsonl")
+ALERT_STATE_PATH = Path("logs/alert_state.json")
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -28,7 +33,11 @@ def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description="MT5 AI-assisted recommendation system (paper trading only)"
     )
-    parser.add_argument("--symbol", required=True, help="Symbol like EURUSD")
+    parser.add_argument("--symbol", help="Single symbol like EURUSD")
+    parser.add_argument(
+        "--symbols",
+        help="Comma-separated symbols for monitor mode, e.g. EURUSD,GBPUSD,XAUUSD",
+    )
     parser.add_argument("--timeframe", default="M5", help="M1/M5/M15/M30/H1/H4/D1")
     parser.add_argument("--settings", default="config/settings.yaml", help="Path to settings YAML")
     parser.add_argument(
@@ -37,10 +46,21 @@ def build_parser() -> argparse.ArgumentParser:
         help="Continuously regenerate recommendations on an interval",
     )
     parser.add_argument(
+        "--monitor",
+        action="store_true",
+        help="Alias for --watch monitor mode",
+    )
+    parser.add_argument(
         "--interval",
         type=int,
         default=300,
-        help="Watch mode interval in seconds (default: 300)",
+        help="Watch/monitor mode interval in seconds (default: 300)",
+    )
+    parser.add_argument(
+        "--cooldown",
+        type=int,
+        default=None,
+        help="Optional alert cooldown in seconds (overrides settings)",
     )
     return parser
 
@@ -78,13 +98,19 @@ def _persist_cycle_result(
     recommendation: Any | None,
     cycle: int,
     interval_seconds: int,
+    symbol: str,
+    alert_status: str = "not_evaluated",
+    alert_reason: str = "",
     error: str | None = None,
 ) -> None:
     MONITOR_LOG_PATH.parent.mkdir(parents=True, exist_ok=True)
 
     payload: dict[str, Any] = {
         "cycle": cycle,
+        "symbol": symbol,
         "interval_seconds": interval_seconds,
+        "alert_status": alert_status,
+        "alert_reason": alert_reason,
         "error": error,
     }
 
@@ -93,6 +119,41 @@ def _persist_cycle_result(
 
     with MONITOR_LOG_PATH.open("a", encoding="utf-8") as handle:
         handle.write(json.dumps(payload) + "\n")
+
+
+def _persist_alert_result(
+    recommendation: Any,
+    cycle: int,
+    symbol: str,
+    sent: bool,
+    status: str,
+    reason: str,
+) -> None:
+    ALERT_LOG_PATH.parent.mkdir(parents=True, exist_ok=True)
+    payload: dict[str, Any] = {
+        "cycle": cycle,
+        "symbol": symbol,
+        "timestamp": datetime.now(tz=timezone.utc).isoformat(timespec="seconds"),
+        "sent": sent,
+        "status": status,
+        "reason": reason,
+        "recommendation": _recommendation_to_dict(recommendation),
+    }
+    with ALERT_LOG_PATH.open("a", encoding="utf-8") as handle:
+        handle.write(json.dumps(payload) + "\n")
+
+
+def _resolve_symbols(args: argparse.Namespace, settings: Any) -> list[str]:
+    if args.symbols:
+        selected = [item.strip().upper() for item in args.symbols.split(",") if item.strip()]
+        if selected:
+            return selected
+    if args.symbol:
+        return [args.symbol.upper()]
+    configured = settings.get("monitoring.symbols", [])
+    if isinstance(configured, list) and configured:
+        return [str(item).upper() for item in configured]
+    return ["EURUSD"]
 
 
 def build_engine(settings: Any) -> RecommendationEngine:
@@ -131,57 +192,116 @@ def build_engine(settings: Any) -> RecommendationEngine:
     )
 
 
-def run(engine: RecommendationEngine, args: argparse.Namespace) -> None:
+def _build_telegram_notifier(settings: Any) -> TelegramNotifier:
+    token = str(settings.get("monitoring.telegram.bot_token") or os.getenv("TELEGRAM_BOT_TOKEN") or "")
+    chat_id = str(settings.get("monitoring.telegram.chat_id") or os.getenv("TELEGRAM_CHAT_ID") or "")
+    enabled = bool(settings.get("monitoring.telegram.enabled", False))
+    timeout_seconds = float(settings.get("monitoring.telegram.timeout_seconds", 10))
+    return TelegramNotifier(
+        TelegramConfig(
+            enabled=enabled,
+            bot_token=token,
+            chat_id=chat_id,
+            timeout_seconds=timeout_seconds,
+        )
+    )
+
+
+def run(engine: RecommendationEngine, args: argparse.Namespace, settings: Any | None = None) -> None:
     interval = max(1, int(args.interval))
+    settings = settings or {}
+    watch_mode = bool(args.watch or getattr(args, "monitor", False))
+    symbols = _resolve_symbols(args, settings)
     cycle = 1
 
+    min_confidence = float(settings.get("recommendation.min_confidence", 0.6)) if hasattr(settings, "get") else 0.6
+    min_rr = float(settings.get("recommendation.min_risk_reward", 1.5)) if hasattr(settings, "get") else 1.5
+    policy = AlertPolicy(min_confidence=min_confidence, min_risk_reward=min_rr)
+
+    configured_cooldown = int(settings.get("monitoring.alert_cooldown_seconds", 900)) if hasattr(settings, "get") else 900
+    cooldown_seconds = int(args.cooldown) if args.cooldown is not None else configured_cooldown
+    cooldown_store = AlertCooldownStore(ALERT_STATE_PATH, cooldown_seconds=cooldown_seconds)
+    notifier = _build_telegram_notifier(settings) if hasattr(settings, "get") else TelegramNotifier(TelegramConfig())
+
     while True:
-        try:
-            recommendation = engine.generate(
-                symbol=args.symbol.upper(),
-                timeframe=args.timeframe.upper(),
-            )
+        for symbol in symbols:
+            try:
+                recommendation = engine.generate(
+                    symbol=symbol,
+                    timeframe=args.timeframe.upper(),
+                )
 
-            print(f"\n--- Cycle {cycle} ---")
-            print(f"Market status: {recommendation.market_status}")
+                print(f"\n--- Cycle {cycle} ({symbol}) ---")
+                print(f"Market status: {recommendation.market_status}")
 
-            is_news_blocked = recommendation.news_status == "blocked"
-            print(f"Trading blocked by news: {'yes' if is_news_blocked else 'no'}")
+                is_news_blocked = recommendation.news_status == "blocked"
+                print(f"Trading blocked by news: {'yes' if is_news_blocked else 'no'}")
 
-            if recommendation.action != "NO_TRADE":
-                print(engine.format_for_terminal(recommendation))
-            else:
-                print("No actionable recommendation this cycle.")
+                if recommendation.action != "NO_TRADE":
+                    print(engine.format_for_terminal(recommendation))
+                else:
+                    print("No actionable recommendation this cycle.")
 
-            if recommendation.market_status == "mt5_unavailable":
-                print("MT5 appears disconnected; will retry next cycle.")
+                should_alert, qualifier_reason = policy.qualifies(recommendation)
+                alert_status = "suppressed"
+                alert_reason = qualifier_reason
+                sent = False
 
-            print(json.dumps(_recommendation_to_dict(recommendation), indent=2))
+                if should_alert:
+                    key = cooldown_store.build_key(recommendation)
+                    can_send, cooldown_reason = cooldown_store.can_send(key, datetime.now(tz=timezone.utc))
+                    if can_send:
+                        sent, send_reason = notifier.send_recommendation_alert(recommendation)
+                        alert_status = "sent" if sent else "failed"
+                        alert_reason = send_reason
+                        if sent:
+                            cooldown_store.mark_sent(key, datetime.now(tz=timezone.utc))
+                    else:
+                        alert_status = "suppressed"
+                        alert_reason = cooldown_reason
 
-            _persist_cycle_result(
-                recommendation,
-                cycle=cycle,
-                interval_seconds=interval,
-            )
+                if recommendation.market_status == "mt5_unavailable":
+                    print("MT5 appears disconnected; will retry next cycle.")
 
-        except Exception as exc:
-            LOGGER.exception("Cycle %s failed while generating recommendation", cycle)
-            print(json.dumps({"error": f"Cycle {cycle} failed: {exc}"}, indent=2))
+                print(f"Alert status: {alert_status} ({alert_reason})")
+                print(json.dumps(_recommendation_to_dict(recommendation), indent=2))
 
-            _persist_cycle_result(
-                None,
-                cycle=cycle,
-                interval_seconds=interval,
-                error=str(exc),
-            )
+                _persist_cycle_result(
+                    recommendation,
+                    cycle=cycle,
+                    interval_seconds=interval,
+                    symbol=symbol,
+                    alert_status=alert_status,
+                    alert_reason=alert_reason,
+                )
+                _persist_alert_result(
+                    recommendation,
+                    cycle=cycle,
+                    symbol=symbol,
+                    sent=sent,
+                    status=alert_status,
+                    reason=alert_reason,
+                )
 
-            if not args.watch:
-                break
+            except Exception as exc:
+                LOGGER.exception("Cycle %s failed while generating recommendation for %s", cycle, symbol)
+                print(json.dumps({"error": f"Cycle {cycle} failed for {symbol}: {exc}"}, indent=2))
 
-        if not args.watch:
+                _persist_cycle_result(
+                    None,
+                    cycle=cycle,
+                    interval_seconds=interval,
+                    symbol=symbol,
+                    error=str(exc),
+                )
+
+                if not watch_mode:
+                    break
+
+        if not watch_mode:
             break
 
-        LOGGER.info("Sleeping %s seconds before next watch cycle", interval)
+        LOGGER.info("Sleeping %s seconds before next monitor cycle", interval)
         time.sleep(interval)
         cycle += 1
 
@@ -193,7 +313,7 @@ def main() -> None:
     configure_logging(settings.get("app.log_level", "INFO"))
 
     engine = build_engine(settings)
-    run(engine, args)
+    run(engine, args, settings=settings)
 
 
 if __name__ == "__main__":

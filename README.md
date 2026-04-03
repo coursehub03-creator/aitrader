@@ -54,6 +54,7 @@ The project includes a premium local dashboard for manual decision support:
 - Paper-trade simulation panel and trade history
 - Strategy leaderboard based on paper-trade outcomes
 - Debug/log panel for operator troubleshooting
+- Optional watch mode for auto-monitoring + alert status visibility
 
 ### Run locally
 
@@ -70,6 +71,16 @@ streamlit run ui/app.py
 ```
 
 > Keep MetaTrader 5 open to enable live MT5 market access. If MT5 is closed or unavailable, the dashboard will safely show `mt5_unavailable` and continue running without crashing.
+
+### Watch mode in Streamlit
+
+- Enable **Auto Refresh** to run recurring cycles.
+- Enable **Watch Mode (Alerts)** to evaluate/send Telegram alerts for strong opportunities only.
+- Configure refresh interval from the sidebar.
+- Dashboard now shows:
+  - current monitoring state (`running`/`idle`)
+  - latest alert status (`sent`, `suppressed`, `failed`, `not_evaluated`)
+  - latest alert reason and alert history table
 
 ### Status meanings in the dashboard
 
@@ -153,3 +164,67 @@ The dashboard top cards and the recommendation output now use the same backend r
 - Terminal output now prints **Market Status** near the top so the operator sees session availability before reviewing strategy details.
 - MT5 initialization includes safe retry behavior (up to 3 attempts with short delay by default).
 - MT5 terminal path and login options can be configured in `config/settings.yaml` under `mt5.*` (`terminal_path`, `login`, `password`, `server`, retry settings).
+
+## Monitor Mode + Telegram Alerts
+
+### Configuration (`config/settings.yaml`)
+
+```yaml
+monitoring:
+  interval_seconds: 300
+  alert_cooldown_seconds: 900
+  symbols: [EURUSD, GBPUSD, USDJPY]
+  telegram:
+    enabled: false
+    bot_token: ""
+    chat_id: ""
+    timeout_seconds: 10
+```
+
+### Enable Telegram alerts
+
+You can configure credentials in YAML or via environment variables:
+
+- `TELEGRAM_BOT_TOKEN`
+- `TELEGRAM_CHAT_ID`
+
+Alerts are **best-effort**: failures are logged and never crash monitoring cycles.
+
+### Run monitor mode from CLI
+
+Single symbol:
+
+```bash
+python -m app.main --symbol EURUSD --monitor --interval 300
+```
+
+Multi-symbol:
+
+```bash
+python -m app.main --symbols EURUSD,GBPUSD,USDJPY --monitor --interval 300
+```
+
+Optional override cooldown:
+
+```bash
+python -m app.main --symbols EURUSD,GBPUSD --monitor --cooldown 1200
+```
+
+### Alert qualification policy (strong opportunities only)
+
+Alerts are sent only when all conditions pass:
+- market is open
+- news is not blocked
+- action is `BUY` or `SELL`
+- signal strength is `strong`
+- confidence >= configured minimum
+- risk/reward >= configured minimum
+
+Duplicate alerts are suppressed with per-symbol+direction cooldown.
+
+### Monitoring persistence
+
+Monitoring writes local logs to:
+- `logs/monitor_cycles.jsonl` (cycle + recommendation + suppression reason)
+- `logs/alert_history.jsonl` (alert outcomes)
+- `logs/alert_state.json` (cooldown state)
