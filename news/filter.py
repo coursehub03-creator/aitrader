@@ -16,9 +16,16 @@ class NewsFilterDecision:
 
 
 class NewsFilter:
-    def __init__(self, before_minutes: int, after_minutes: int) -> None:
+    def __init__(
+        self,
+        before_minutes: int,
+        after_minutes: int,
+        medium_impact_confidence_multiplier: float = 0.7,
+    ) -> None:
         self.before = timedelta(minutes=before_minutes)
         self.after = timedelta(minutes=after_minutes)
+        self.medium_multiplier = float(medium_impact_confidence_multiplier)
+        self.major_macro_currencies = {"USD", "EUR", "GBP", "JPY", "CHF", "CAD", "AUD", "NZD"}
 
     def evaluate(
         self,
@@ -27,8 +34,10 @@ class NewsFilter:
         symbol_currencies: list[str],
     ) -> NewsFilterDecision:
         watched = {currency.upper() for currency in symbol_currencies}
+        include_major_macro = "MACRO" in watched
         for event in events:
-            if event.currency.upper() not in watched:
+            event_currency = event.currency.upper()
+            if event_currency not in watched and not (include_major_macro and event_currency in self.major_macro_currencies):
                 continue
             if not (event.event_time - self.before <= now <= event.event_time + self.after):
                 continue
@@ -44,7 +53,7 @@ class NewsFilter:
                 return NewsFilterDecision(
                     decision="reduce confidence",
                     reason=f"Medium-impact news nearby: {event.title} ({event.currency})",
-                    confidence_multiplier=0.7,
+                    confidence_multiplier=self.medium_multiplier,
                 )
 
         return NewsFilterDecision(

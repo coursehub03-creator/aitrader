@@ -6,11 +6,13 @@ news:
   provider: forexfactory
   endpoint: https://nfs.faireconomy.media/ff_calendar_thisweek.json
   high_impact_cooldown_before_min: 30
-  high_impact_cooldown_after_min: 30
+  high_impact_cooldown_after_min: 15
+  medium_impact_confidence_multiplier: 0.7
   symbols_map:
     EURUSD: [EUR, USD]
     GBPUSD: [GBP, USD]
     USDJPY: [USD, JPY]
+    XAUUSD: [USD, MACRO]
 
 strategy:
   trend_rsi:

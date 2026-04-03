@@ -18,6 +18,7 @@ def test_symbol_currency_mapping_uses_fallback_split() -> None:
     symbol_map = {"GBPUSD": ["GBP", "USD"]}
     assert currencies_for_symbol("EURUSD", symbol_map) == ["EUR", "USD"]
     assert currencies_for_symbol("GBPUSD", symbol_map) == ["GBP", "USD"]
+    assert currencies_for_symbol("XAUUSD", {}) == ["USD", "MACRO"]
 
 
 def test_forexfactory_provider_returns_empty_on_request_error(monkeypatch) -> None:

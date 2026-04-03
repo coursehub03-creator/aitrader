@@ -85,6 +85,7 @@ class RecommendationEngine:
                 market_price,
                 confidence_multiplier,
                 news_status,
+                reason,
                 run_timestamp,
             )
             LOGGER.info("Final recommendation generated\n%s", self.format_for_terminal(recommendation))
@@ -178,8 +179,8 @@ class RecommendationEngine:
                 now + timedelta(hours=24),
             )
         except Exception as exc:  # defensive fallback for custom providers
-            LOGGER.warning("News provider failed; continuing without news events: %s", exc)
-            events = []
+            LOGGER.warning("News provider failed; marking news status unknown: %s", exc)
+            return False, "unknown", "News provider unavailable; decision generated without news confirmation", 1.0
 
         symbol_currencies = currencies_for_symbol(symbol, self.settings.get("news.symbols_map", {}))
         decision = self.news_filter.evaluate(now, events, symbol_currencies)
@@ -202,6 +203,7 @@ class RecommendationEngine:
         market_price: float,
         confidence_multiplier: float = 1.0,
         news_status: str = "clear",
+        news_reason: str = "No relevant blocking events",
         timestamp: datetime | None = None,
     ) -> FinalRecommendation:
         buys = [item for item in strategy_outputs if item[0].action == SignalAction.BUY]
@@ -225,7 +227,7 @@ class RecommendationEngine:
         entry_vals: list[float] = []
         sl_vals: list[float] = []
         tp_vals: list[float] = []
-        reasons: list[str] = [f"News status: {news_status}"]
+        reasons: list[str] = [f"News status: {news_status}", f"News effect: {news_reason}"]
         names: list[str] = []
         excluded_names: list[str] = []
         weak_cutoff = float(self.settings.get("learning.weak_strategy_score_cutoff", 1.0))
@@ -319,6 +321,14 @@ class RecommendationEngine:
 
     @staticmethod
     def format_for_terminal(recommendation: FinalRecommendation) -> str:
+        news_effect = next(
+            (
+                reason.replace("News effect: ", "", 1)
+                for reason in recommendation.reasons
+                if reason.startswith("News effect: ")
+            ),
+            "n/a",
+        )
         lines = [
             "╔══════════════════════════ FINAL RECOMMENDATION ══════════════════════════╗",
             f"║ Symbol/TF         : {recommendation.symbol}/{recommendation.timeframe}",
@@ -329,6 +339,7 @@ class RecommendationEngine:
             f"║ Confidence        : {recommendation.confidence:.2%}",
             f"║ Selected Strategy : {recommendation.selected_strategy_name}",
             f"║ News Status       : {recommendation.news_status}",
+            f"║ News Effect       : {news_effect}",
             f"║ Timestamp (UTC)   : {recommendation.timestamp.isoformat()}",
             "╠════════════════════════════════ REASONS ══════════════════════════════════╣",
         ]
