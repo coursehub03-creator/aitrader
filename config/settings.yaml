@@ -42,6 +42,12 @@ strategy:
 
 learning:
   optimization_enabled: true
+  historical_weight: 0.4
+  recent_weight: 0.6
+  min_promotion_sample: 15
+  max_promotion_drawdown: 7.5
+  min_promotion_expectancy: 0.0
+  degradation_threshold: 25.0
   lookahead_bars: 8
   min_history_bars: 120
   backtest_step: 10

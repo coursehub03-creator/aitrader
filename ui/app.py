@@ -331,25 +331,43 @@ def render_learning_center(service: DashboardService, symbol: str, timeframe: st
     st.markdown("## Self-Learning Center")
     st.caption("Transparent, persistence-backed control center for optimizer, validation, and paper-trade learning flow.")
 
-    controls = st.columns(7)
+    fetch_cols = st.columns(5)
+    hist_symbol = fetch_cols[0].selectbox("History Symbol", COMMON_SYMBOLS, index=max(0, COMMON_SYMBOLS.index(symbol) if symbol in COMMON_SYMBOLS else 0))
+    hist_timeframe = fetch_cols[1].selectbox("History Timeframe", TIMEFRAMES, index=max(0, TIMEFRAMES.index(timeframe) if timeframe in TIMEFRAMES else 1))
+    lookback_unit = fetch_cols[2].selectbox("Lookback Unit", ["days", "weeks", "months"], index=0)
+    lookback_value = int(fetch_cols[3].number_input("Lookback Range", min_value=1, max_value=365, value=90, step=1))
+    if fetch_cols[4].button("Fetch Historical Data", use_container_width=True):
+        fetched, message = service.fetch_historical_data(hist_symbol, hist_timeframe, lookback_value, lookback_unit)
+        if fetched.empty:
+            st.warning(message)
+        else:
+            st.success(f"{message} Number of candles saved: {len(fetched)}")
+
+    controls = st.columns(8)
     if controls[0].button("Run Historical Validation", use_container_width=True):
         frame = service.run_historical_validation()
         st.success(f"Historical validation refreshed ({len(frame)} rows).")
     if controls[1].button("Run Optimizer Now", use_container_width=True):
         frame = service.run_optimizer(symbol, timeframe)
         st.success(f"Optimizer finished ({len(frame)} rows).")
-    if controls[2].button("Refresh Learning Data", use_container_width=True):
+    if controls[2].button("Run Historical Learning", use_container_width=True):
+        frame = service.run_historical_learning(hist_symbol, hist_timeframe)
+        if "status" in frame.columns:
+            st.info(str(frame.iloc[0].get("message", "No data available")))
+        else:
+            st.success(f"Learning run success ({len(frame)} rows).")
+    if controls[3].button("Refresh Learning Data", use_container_width=True):
         st.info("Learning datasets reloaded from local persistence.")
-    if controls[3].button("Evaluate Open Paper Trades", use_container_width=True):
+    if controls[4].button("Evaluate Open Paper Trades", use_container_width=True):
         _, message = service.evaluate_open_paper_trades()
         st.info(message)
-    if controls[4].button("Promote Eligible Candidates", use_container_width=True):
+    if controls[5].button("Promote Eligible Candidates", use_container_width=True):
         promoted = service.promote_eligible_candidates()
         st.success(f"Promoted {promoted} candidate(s).")
-    if controls[5].button("Recompute Leaderboards", use_container_width=True):
+    if controls[6].button("Recompute Leaderboards", use_container_width=True):
         board = service.recompute_leaderboards()
         st.success(f"Leaderboard rows: {len(board)}.")
-    if controls[6].button("Archive Disabled Strategies", use_container_width=True):
+    if controls[7].button("Archive Disabled Strategies", use_container_width=True):
         archived = service.archive_disabled_strategies()
         st.success(f"Archived disabled rows: {archived}.")
 
@@ -360,6 +378,7 @@ def render_learning_center(service: DashboardService, symbol: str, timeframe: st
     historical = payload["historical_validation"]
     events = payload["events"]
     best_config = payload["best_config"]
+    history_summary = service.historical_data_summary()
     paper = service.load_paper_trades(limit=400)
     health = payload["health"]
 
@@ -412,6 +431,11 @@ def render_learning_center(service: DashboardService, symbol: str, timeframe: st
         m[7].metric("Last Validation", health["last_historical_validation_run"])
         m[8].metric("Last Paper Update", health["last_paper_trade_update"])
         st.info(health["status_reason"])
+        st.markdown("### Stored Historical Market Data")
+        if history_summary.empty:
+            st.info("No data available")
+        else:
+            st.dataframe(history_summary, use_container_width=True, hide_index=True)
 
     with tabs[1]:
         st.markdown("### Active Strategies")
@@ -430,6 +454,7 @@ def render_learning_center(service: DashboardService, symbol: str, timeframe: st
                         "strategy_state",
                         "historical_score",
                         "recent_score",
+                        "combined_score",
                         "learning_confidence",
                         "trade_count",
                         "win_rate",
@@ -461,6 +486,7 @@ def render_learning_center(service: DashboardService, symbol: str, timeframe: st
                         "parameter_summary",
                         "historical_score",
                         "recent_score",
+                        "combined_score",
                         "promotion_eligibility",
                         "sample_size",
                         "eligibility_reason",

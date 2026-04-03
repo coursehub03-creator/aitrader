@@ -202,6 +202,42 @@ class MT5Client:
         """Backward-compatible alias for fetch_rates()."""
         return self.fetch_rates(symbol, timeframe, bars)
 
+    def fetch_rates_range(
+        self,
+        symbol: str,
+        timeframe: str,
+        from_time: datetime,
+        to_time: datetime,
+    ) -> pd.DataFrame:
+        """Fetch OHLCV rates for a specific datetime range."""
+        if not self.connected or mt5 is None:
+            self.status_message = "MT5 is not connected"
+            return pd.DataFrame(columns=["time", "open", "high", "low", "close", "volume"])
+        if to_time <= from_time:
+            self.status_message = "Invalid historical range: to_time must be greater than from_time"
+            return pd.DataFrame(columns=["time", "open", "high", "low", "close", "volume"])
+        if not self.ensure_symbol_selected(symbol):
+            return pd.DataFrame(columns=["time", "open", "high", "low", "close", "volume"])
+
+        try:
+            mt5_tf = self.timeframe_to_mt5_constant(timeframe)
+        except ValueError as exc:
+            self.status_message = str(exc)
+            return pd.DataFrame(columns=["time", "open", "high", "low", "close", "volume"])
+
+        try:
+            rates = mt5.copy_rates_range(symbol, mt5_tf, from_time, to_time)
+        except Exception as exc:
+            self.status_message = f"Failed to fetch historical OHLCV range for {symbol}/{timeframe}: {exc}"
+            LOGGER.exception(self.status_message)
+            return pd.DataFrame(columns=["time", "open", "high", "low", "close", "volume"])
+
+        if rates is None or len(rates) == 0:
+            self.status_message = f"No historical rates returned for {symbol}/{timeframe} in selected range"
+            return pd.DataFrame(columns=["time", "open", "high", "low", "close", "volume"])
+
+        return self._to_ohlcv_dataframe(rates)
+
     def detect_market_status(self, symbol: str, timeframe: str) -> tuple[str, str]:
         """Return market status and reason for a symbol/timeframe pair.
 

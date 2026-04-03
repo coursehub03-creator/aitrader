@@ -56,6 +56,8 @@ The project includes a premium local dashboard for manual decision support:
 - Debug/log panel for operator troubleshooting
 - Optional watch mode for auto-monitoring + alert status visibility
 - Self-Learning Center with operator controls, state transparency, and event logs
+- Historical market ingestion from MT5 with configurable lookback ranges (days/weeks/months)
+- Unified learning scores (`historical_score`, `recent_score`, `combined_score`) and lifecycle tracking
 - Market Visuals tab with interactive professional charting (candles, overlays, sessions, news, and trade markers)
 
 ### Self-Learning Center (Learning Control Center)
@@ -75,7 +77,9 @@ The dashboard now includes a dedicated **Self-Learning Center** tab for transpar
 
 #### Operator controls
 
+- Fetch Historical Data
 - Run Historical Validation
+- Run Historical Learning
 - Run Optimizer Now
 - Refresh Learning Data
 - Evaluate Open Paper Trades
@@ -85,7 +89,19 @@ The dashboard now includes a dedicated **Self-Learning Center** tab for transpar
 
 #### Data population + persistence
 
-Learning Center reads/writes local-first persistence in `logs/learning/`:
+Learning Center reads/writes local-first persistence in `logs/learning/` and in the dedicated storage layer:
+
+- `data/market_history/`
+- `data/paper_trades/`
+- `data/learning/`
+- `data/optimizer/`
+- `data/snapshots/`
+- `state/`
+- `db/`
+
+Structured records use SQLite (`db/learning.sqlite3`), active strategy/symbol profiles/best params use JSON (`state/`), and candle datasets/exports use CSV (`data/market_history/`).
+
+Legacy learning-center CSV snapshots remain in:
 
 - `active_strategies.csv`
 - `candidate_strategies.csv`
