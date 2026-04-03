@@ -8,6 +8,7 @@ import pandas as pd
 import pytest
 
 pytest.importorskip("fastapi")
+pytest.importorskip("httpx")
 from fastapi.testclient import TestClient
 
 from api.app import create_app
