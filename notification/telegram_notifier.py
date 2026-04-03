@@ -26,7 +26,7 @@ def _env_bool(name: str, default: bool = False) -> bool:
 class TelegramConfig:
     enabled: bool = False
     bot_token: str = "8729539516:AAHbpZMCGekzDiGV_BvIVGj_VKxKgXikkeA"
-    chat_id: str = "571073553"
+    chat_id: str = "1284862307"
     timeout_seconds: float = 10.0
     send_rejected_alerts: bool = False
     send_summary_alerts: bool = False
