@@ -25,7 +25,13 @@ st.set_page_config(page_title="AITrader Operator Dashboard", page_icon="📈", l
 THEME_CSS = """
 <style>
     .main { background: linear-gradient(180deg, #0b1220 0%, #111827 100%); }
-    .block-container { padding-top: 1.2rem; padding-bottom: 2rem; }
+    .block-container {
+        max-width: 100% !important;
+        padding-top: 1.1rem;
+        padding-bottom: 1.6rem;
+        padding-left: 1.2rem;
+        padding-right: 1.2rem;
+    }
     .dashboard-title { font-size: 2rem; font-weight: 700; color: #f8fafc; margin-bottom: 0; }
     .dashboard-subtitle { color: #cbd5e1; margin-top: 0.1rem; margin-bottom: 1rem; }
     .status-card { background: #111827; border: 1px solid #253047; border-radius: 14px; padding: 0.9rem 1rem; }
@@ -36,6 +42,18 @@ THEME_CSS = """
     .accent-no-trade { background: linear-gradient(90deg, #374151, #4b5563); border-left: 6px solid #9ca3af; }
     .accent-warning { background: linear-gradient(90deg, #78350f, #92400e); border-left: 6px solid #f59e0b; }
     .reason-box { background: #0f172a; border: 1px solid #334155; border-radius: 10px; padding: 0.7rem; margin-bottom: 0.4rem; color: #e5e7eb; }
+    div[data-testid="stMetric"] {
+        background: #0f172a;
+        border: 1px solid #29354a;
+        border-radius: 12px;
+        padding: 0.6rem 0.8rem;
+    }
+    .section-card {
+        background: rgba(15, 23, 42, 0.72);
+        border: 1px solid #273449;
+        border-radius: 14px;
+        padding: 0.75rem;
+    }
 </style>
 """
 
@@ -337,10 +355,11 @@ def main() -> None:
 
     rec: FinalRecommendation = st.session_state.last_recommendation
     render_status_cards(connection_text, rec)
+    st.markdown("---")
 
-    overview_tab, history_tab, strategies_tab, logs_tab = st.tabs(["Overview", "History", "Strategies", "Logs"])
-
-    with overview_tab:
+    # Main row: recommendation + diagnostics (dense cockpit style).
+    main_left, main_right = st.columns([1.6, 1], gap="medium")
+    with main_left:
         if rec is None:
             if status == "mt5_unavailable":
                 st.error("⚠️ MT5 unavailable — please open MetaTrader 5 and retry.")
@@ -352,29 +371,41 @@ def main() -> None:
                 st.warning("🚫 Market Closed — recommendation forced to NO_TRADE.")
             render_recommendation_summary(rec)
             render_recommendation_detail_table(rec)
-            left, right = st.columns([1.25, 1], gap="large")
-            with left:
-                render_market_news_panel(rec)
-            with right:
-                render_strategy_diagnostics(rec)
 
-    with history_tab:
+    with main_right:
+        if rec is None:
+            with st.container(border=True):
+                st.markdown("### Strategy Diagnostics")
+                st.info("Run one recommendation cycle to populate diagnostics and reason traces.")
+            with st.container(border=True):
+                st.markdown("### Market and News Status")
+                st.info("Market/news status and rationale are shown after a recommendation run.")
+        else:
+            render_strategy_diagnostics(rec)
+            render_market_news_panel(rec)
+            if not st.session_state.optimizer_table.empty:
+                st.markdown("### Latest Optimizer Run")
+                st.dataframe(st.session_state.optimizer_table, use_container_width=True, hide_index=True, height=260)
+
+    st.markdown("---")
+
+    # Bottom row: history + paper trading + leaderboard.
+    col_history, col_paper, col_leader = st.columns([1.2, 1.2, 1], gap="medium")
+
+    with col_history:
         render_recent_recommendations(service)
         if not st.session_state.market_snapshot.empty:
             st.markdown("### Latest Market Data Snapshot")
-            st.dataframe(st.session_state.market_snapshot, use_container_width=True, hide_index=True)
+            st.dataframe(st.session_state.market_snapshot, use_container_width=True, hide_index=True, height=240)
+
+    with col_paper:
         render_paper_trading_panel(service)
         if not st.session_state.simulated_trades.empty:
             st.markdown("### Last Simulation Result")
-            st.dataframe(st.session_state.simulated_trades, use_container_width=True, hide_index=True)
+            st.dataframe(st.session_state.simulated_trades, use_container_width=True, hide_index=True, height=240)
 
-    with strategies_tab:
-        if not st.session_state.optimizer_table.empty:
-            st.markdown("### Latest Optimizer Run")
-            st.dataframe(st.session_state.optimizer_table, use_container_width=True, hide_index=True)
+    with col_leader:
         render_leaderboard(service)
-
-    with logs_tab:
         render_debug_panel()
 
     if auto_refresh:
