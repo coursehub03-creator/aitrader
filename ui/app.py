@@ -10,8 +10,6 @@ import traceback
 import pandas as pd
 import streamlit as st
 
-# Ensure project-root absolute imports resolve when launched as:
-#   streamlit run ui/app.py
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
@@ -19,54 +17,34 @@ if str(PROJECT_ROOT) not in sys.path:
 from core.types import FinalRecommendation, SignalAction
 from ui.charting import ChartControls, build_market_figure, prepare_chart_payload
 from ui.dashboard_service import DashboardService
+from ui.terminal_view_model import (
+    prepare_alert_rows,
+    prepare_live_update_state,
+    prepare_recommendation_panel,
+    prepare_status_strip,
+    prepare_watchlist_rows,
+    utc_now_label,
+)
 
-
-st.set_page_config(page_title="AITrader Operator Dashboard", page_icon="📈", layout="wide")
-
-THEME_CSS = """
-<style>
-    .main { background: linear-gradient(180deg, #0b1220 0%, #111827 100%); }
-    .block-container {
-        max-width: 100% !important;
-        padding-top: 1.1rem;
-        padding-bottom: 1.6rem;
-        padding-left: 1.2rem;
-        padding-right: 1.2rem;
-    }
-    .dashboard-title { font-size: 2rem; font-weight: 700; color: #f8fafc; margin-bottom: 0; }
-    .dashboard-subtitle { color: #cbd5e1; margin-top: 0.1rem; margin-bottom: 1rem; }
-    .status-card { background: #111827; border: 1px solid #253047; border-radius: 14px; padding: 0.9rem 1rem; }
-    .status-label { color: #9ca3af; font-size: 0.82rem; text-transform: uppercase; letter-spacing: .06em; }
-    .status-value { color: #f8fafc; font-size: 1.25rem; font-weight: 700; }
-    .accent-buy { background: linear-gradient(90deg, #14532d, #166534); border-left: 6px solid #22c55e; }
-    .accent-sell { background: linear-gradient(90deg, #7f1d1d, #991b1b); border-left: 6px solid #ef4444; }
-    .accent-no-trade { background: linear-gradient(90deg, #374151, #4b5563); border-left: 6px solid #9ca3af; }
-    .accent-warning { background: linear-gradient(90deg, #78350f, #92400e); border-left: 6px solid #f59e0b; }
-    .reason-box { background: #0f172a; border: 1px solid #334155; border-radius: 10px; padding: 0.7rem; margin-bottom: 0.4rem; color: #e5e7eb; }
-    div[data-testid="stMetric"] {
-        background: #0f172a;
-        border: 1px solid #29354a;
-        border-radius: 12px;
-        padding: 0.6rem 0.8rem;
-    }
-    .section-card {
-        background: rgba(15, 23, 42, 0.72);
-        border: 1px solid #273449;
-        border-radius: 14px;
-        padding: 0.75rem;
-    }
-    .badge { border-radius: 999px; padding: 0.18rem 0.6rem; font-size: 0.75rem; font-weight: 700; display:inline-block; }
-    .badge-promoted { background:#14532d; color:#dcfce7; }
-    .badge-stable { background:#1e3a8a; color:#dbeafe; }
-    .badge-probation { background:#92400e; color:#fef3c7; }
-    .badge-recently_degraded { background:#7f1d1d; color:#fee2e2; }
-    .badge-candidate { background:#5b21b6; color:#ede9fe; }
-    .badge-disabled { background:#374151; color:#e5e7eb; }
-</style>
-"""
+st.set_page_config(page_title="AITrader Trading Terminal", page_icon="📈", layout="wide")
 
 COMMON_SYMBOLS = ["EURUSD", "GBPUSD", "USDJPY", "XAUUSD", "AUDUSD", "USDCAD"]
 TIMEFRAMES = ["M1", "M5", "M15", "M30", "H1", "H4", "D1"]
+
+THEME_CSS = """
+<style>
+.main, [data-testid="stAppViewContainer"] { background: radial-gradient(circle at top, #10192b 0%, #060b16 48%, #02040b 100%); color:#e2e8f0; }
+.block-container { max-width: 100% !important; padding: 0.65rem 0.9rem 1rem 0.9rem; }
+.terminal-strip{display:flex;gap:.4rem;overflow-x:auto;padding:.35rem .2rem .5rem .2rem;}
+.terminal-pill{background:#0d1526;border:1px solid #27344e;border-radius:10px;padding:.28rem .55rem;min-width:120px}
+.terminal-k{font-size:.65rem;color:#8aa0c7;text-transform:uppercase;letter-spacing:.06em}
+.terminal-v{font-size:.88rem;color:#f8fbff;font-weight:700}
+.rec-card{border-radius:12px;padding:.7rem;background:#0f172a;border:1px solid #2b3a55}
+.rec-active{box-shadow: inset 0 0 0 1px rgba(34,197,94,.45);}
+.rec-blocked{box-shadow: inset 0 0 0 1px rgba(239,68,68,.45);}
+.small-muted{font-size:.77rem;color:#94a3b8}
+</style>
+"""
 
 
 @st.cache_resource
@@ -74,536 +52,137 @@ def get_service() -> DashboardService:
     return DashboardService()
 
 
+@st.cache_data(ttl=25, show_spinner=False)
+def _load_chart_candles(symbol: str, timeframe: str, bars: int) -> tuple[pd.DataFrame, str]:
+    return get_service().refresh_market_data(symbol, timeframe, bars=bars)
+
+
+@st.cache_data(ttl=75, show_spinner=False)
+def _load_chart_news(symbol: str) -> list[dict]:
+    return get_service().recent_news_events(symbol)
+
+
 def ensure_state() -> None:
     defaults = {
+        "selected_symbol": "EURUSD",
+        "selected_timeframe": "M5",
         "last_recommendation": None,
-        "last_refresh": None,
+        "recommendations_by_symbol": {},
         "last_refresh_label": "Never",
-        "debug_logs": [],
-        "market_snapshot": pd.DataFrame(),
-        "optimizer_table": pd.DataFrame(),
-        "simulated_trades": pd.DataFrame(),
-        "recommendation_history": [],
         "latest_alert_status": "n/a",
         "latest_alert_reason": "",
-        "last_sent_alert_timestamp": "n/a",
-        "current_recommendation_triggered_alert": False,
         "alert_suppressed_reason": "",
         "monitoring_state": "idle",
+        "watch_mode": False,
+        "auto_refresh": False,
+        "refresh_interval": 15,
+        "compact_mode": False,
+        "expanded_chart": False,
+        "recommendation_history": [],
     }
-    for key, value in defaults.items():
-        if key not in st.session_state:
-            st.session_state[key] = value
-
-
-def log_debug(message: str) -> None:
-    timestamp = datetime.now(timezone.utc).isoformat(timespec="seconds")
-    st.session_state.debug_logs = [f"[{timestamp}] {message}", *st.session_state.debug_logs[:99]]
-
-
-def action_theme(recommendation: FinalRecommendation) -> tuple[str, str]:
-    action = recommendation.action.value if hasattr(recommendation.action, "value") else str(recommendation.action)
-    if recommendation.market_status != "open" or action == SignalAction.NO_TRADE:
-        return "NO_TRADE", "accent-no-trade"
-    if action == SignalAction.BUY:
-        return "BUY", "accent-buy"
-    if action == SignalAction.SELL:
-        return "SELL", "accent-sell"
-    return "NO_TRADE", "accent-no-trade"
+    for k, v in defaults.items():
+        if k not in st.session_state:
+            st.session_state[k] = v
 
 
 def normalize_recommendation(recommendation: FinalRecommendation) -> FinalRecommendation:
-    if recommendation.market_status == "mt5_unavailable":
+    if recommendation.market_status in {"mt5_unavailable", "closed"}:
         recommendation.action = SignalAction.NO_TRADE
-    if recommendation.market_status == "closed":
-        recommendation.action = SignalAction.NO_TRADE
-        if "Market Closed: Trading recommendation suppressed by policy." not in recommendation.reasons:
-            recommendation.reasons = recommendation.reasons + ["Market Closed: Trading recommendation suppressed by policy."]
     if recommendation.news_status == "blocked":
         recommendation.action = SignalAction.NO_TRADE
     return recommendation
 
 
-def render_header() -> None:
-    st.markdown(THEME_CSS, unsafe_allow_html=True)
-    st.markdown('<p class="dashboard-title">AITrader Operator Dashboard</p>', unsafe_allow_html=True)
-    st.markdown(
-        '<p class="dashboard-subtitle">Premium local-first decision cockpit for MT5 recommendation workflows.</p>',
-        unsafe_allow_html=True,
+def run_cycle(service: DashboardService, symbol: str, timeframe: str, watch_mode: bool) -> FinalRecommendation:
+    recommendation = normalize_recommendation(service.generate_recommendation(symbol, timeframe))
+    st.session_state.last_recommendation = recommendation
+    st.session_state.recommendations_by_symbol[symbol] = recommendation
+    st.session_state.last_refresh_label = utc_now_label()
+    st.session_state.recommendation_history = ([
+        {
+            "timestamp": recommendation.timestamp.replace(tzinfo=timezone.utc).isoformat(timespec="seconds"),
+            "symbol": recommendation.symbol,
+            "action": recommendation.action.value if hasattr(recommendation.action, "value") else str(recommendation.action),
+            "confidence": recommendation.confidence,
+            "signal_strength": recommendation.signal_strength,
+            "selected_strategy": recommendation.selected_strategy,
+            "market_status": recommendation.market_status,
+            "news_status": recommendation.news_status,
+        }
+    ] + st.session_state.recommendation_history)[:200]
+
+    if watch_mode:
+        status, reason, triggered, alert_type = service.evaluate_and_send_alert(recommendation)
+        service.persist_alert_event(recommendation, status, reason, triggered, alert_type)
+        st.session_state.latest_alert_status = status
+        st.session_state.latest_alert_reason = reason
+        st.session_state.alert_suppressed_reason = reason if status == "suppressed" else ""
+    else:
+        st.session_state.latest_alert_status = "not_evaluated"
+        st.session_state.latest_alert_reason = "watch mode disabled"
+    return recommendation
+
+
+def build_symbol_snapshot(service: DashboardService, symbol: str, timeframe: str) -> dict:
+    candles, _ = service.refresh_market_data(symbol, timeframe, bars=180)
+    market_status, _ = service.connection_status(symbol, timeframe)
+    if candles.empty:
+        return {"last_price": 0.0, "daily_change_pct": 0.0, "market_status": market_status}
+    last = float(candles.iloc[-1]["close"])
+    first = float(candles.iloc[0]["open"])
+    change = ((last - first) / first) * 100 if first else 0.0
+    return {"last_price": last, "daily_change_pct": change, "market_status": market_status}
+
+
+def render_status_strip(recommendation: FinalRecommendation | None, symbol: str, timeframe: str, snapshots: dict[str, dict]) -> None:
+    if recommendation:
+        spread = recommendation.spread_value
+        session = recommendation.session_state
+        market_status = recommendation.market_status
+        news_status = recommendation.news_status
+        strategy = recommendation.selected_strategy
+        signal = recommendation.signal_strength
+    else:
+        spread, session, market_status, news_status, strategy, signal = 0.0, "n/a", snapshots.get(symbol, {}).get("market_status", "unknown"), "unknown", "n/a", "weak"
+
+    rows = prepare_status_strip(
+        active_symbol=symbol,
+        timeframe=timeframe,
+        spread=spread,
+        session=session,
+        market_status=market_status,
+        news_status=news_status,
+        selected_strategy=strategy,
+        signal_strength=signal,
+        current_price=float(snapshots.get(symbol, {}).get("last_price", 0.0)),
     )
+    html = "".join([f"<div class='terminal-pill'><div class='terminal-k'>{k}</div><div class='terminal-v'>{v}</div></div>" for k, v in rows])
+    st.markdown(f"<div class='terminal-strip'>{html}</div>", unsafe_allow_html=True)
 
 
-def render_status_cards(connection_status: str, recommendation: FinalRecommendation | None) -> None:
-    mt5_status = recommendation.mt5_connection_status if recommendation else connection_status
-    market_status = recommendation.market_status if recommendation else "n/a"
-    news_status = recommendation.news_status if recommendation else "n/a"
-    refresh_text = st.session_state.last_refresh_label
-    cards = st.columns(6)
-    cards[0].metric("MT5 Connection", mt5_status)
-    cards[1].metric("Market Status", market_status)
-    cards[2].metric("News Status", news_status)
-    cards[3].metric("Last Refresh", refresh_text)
-    cards[4].metric("Alert Status", st.session_state.latest_alert_status)
-    cards[5].metric("Last Alert Sent", st.session_state.last_sent_alert_timestamp)
+def render_watchlist(service: DashboardService, symbols: list[str], timeframe: str, recommendations: dict[str, FinalRecommendation]) -> tuple[pd.DataFrame, dict[str, dict]]:
+    snapshots = {sym: build_symbol_snapshot(service, sym, timeframe) for sym in symbols}
+    rows = prepare_watchlist_rows(symbols, snapshots, recommendations)
+    rows["daily_change_pct"] = rows["daily_change_pct"].map(lambda v: f"{v:+.2f}%")
+    rows["last_price"] = rows["last_price"].map(lambda v: f"{v:.5f}" if v else "n/a")
+    st.dataframe(rows, use_container_width=True, hide_index=True, height=295)
+    return rows, snapshots
 
 
-def render_recommendation_summary(recommendation: FinalRecommendation) -> None:
-    action_text, theme = action_theme(recommendation)
-    st.markdown("### Recommendation Summary")
-
-    if recommendation.market_status == "closed":
-        st.error("🚫 Market Closed — no trade recommendation is allowed for this cycle.")
-    elif recommendation.market_status == "mt5_unavailable":
-        st.error("⚠️ MT5 unavailable — please open MetaTrader 5 and retry.")
-    elif recommendation.market_status == "unavailable":
-        st.warning("⚠️ Selected symbol is unavailable in MT5 Market Watch.")
-
-    if recommendation.news_status == "blocked":
-        st.error("📰 High-impact news blocked trading for this cycle.")
-    elif recommendation.news_status == "reduced_confidence":
-        st.warning("📰 News impact reduced confidence — review risk carefully.")
-    if recommendation.confidence < 0.6:
-        st.warning("⚠️ Low confidence: below minimum quality threshold (0.60).")
-    if recommendation.volatility_state in {"low", "high"}:
-        st.warning(f"⚠️ Volatility risk detected: {recommendation.volatility_state.upper()}.")
-    if recommendation.spread_state == "excessive":
-        st.error("📏 Spread is excessive for this symbol profile. Trade blocked.")
-    elif recommendation.spread_state == "elevated":
-        st.warning("📏 Spread is elevated. Confidence may be reduced.")
-    if recommendation.next_relevant_news_event:
-        evt = recommendation.next_relevant_news_event
-        mins = evt.get("minutes_to_event", "n/a")
-        st.info(f"🗞️ Next news event in {mins} min: {evt.get('title', 'n/a')} ({evt.get('currency', 'n/a')}, {evt.get('impact', 'n/a')})")
-
-    st.markdown(
-        f"""
-        <div class="status-card {theme}" style="margin-bottom:0.8rem;">
-          <div class="status-label">Final Decision</div>
-          <div class="status-value" style="font-size:1.6rem;">{action_text}</div>
-        </div>
-        """,
-        unsafe_allow_html=True,
-    )
-
-    c1, c2, c3, c4 = st.columns(4)
-    c1.metric("Entry", f"{recommendation.entry:.5f}")
-    c2.metric("Stop Loss", f"{recommendation.stop_loss:.5f}")
-    c3.metric("Take Profit", f"{recommendation.take_profit:.5f}")
-    c4.metric("Confidence", f"{recommendation.confidence:.2%}")
-    st.metric("Risk / Reward", f"{recommendation.risk_reward:.2f}")
-    st.metric("Signal Strength", recommendation.signal_strength.upper())
-    st.metric("Session State", recommendation.session_state)
-    st.metric("Spread", f"{recommendation.spread_value:.2f} ({recommendation.spread_state})")
-    st.metric("Symbol Profile", recommendation.symbol_profile)
-    if recommendation.action == SignalAction.NO_TRADE and recommendation.rejection_reason:
-        st.error(f"Rejected trade: {recommendation.rejection_reason}")
-
-
-def render_recommendation_detail_table(recommendation: FinalRecommendation) -> None:
-    st.markdown("### Live Recommendation Output")
-    action = recommendation.action.value if hasattr(recommendation.action, "value") else str(recommendation.action)
-    rows = [
-        ("symbol", recommendation.symbol),
-        ("timeframe", recommendation.timeframe),
-        ("timestamp", recommendation.timestamp.replace(tzinfo=timezone.utc).isoformat(timespec="seconds")),
-        ("market_status", recommendation.market_status),
-        ("mt5_connection_status", recommendation.mt5_connection_status),
-        ("news_status", recommendation.news_status),
-        ("symbol_profile", recommendation.symbol_profile),
-        ("session_state", recommendation.session_state),
-        ("spread_state", recommendation.spread_state),
-        ("spread_value", recommendation.spread_value),
-        ("selected_strategy", recommendation.selected_strategy),
-        ("action", action),
-        ("entry", f"{recommendation.entry:.5f}"),
-        ("stop_loss", f"{recommendation.stop_loss:.5f}"),
-        ("take_profit", f"{recommendation.take_profit:.5f}"),
-        ("confidence", f"{recommendation.confidence:.2%}"),
-        ("risk_reward", f"{recommendation.risk_reward:.2f}"),
-        ("signal_strength", recommendation.signal_strength),
-        ("rejection_reason", recommendation.rejection_reason or ""),
-        ("volatility_state", recommendation.volatility_state),
-        ("next_relevant_news_event", recommendation.next_relevant_news_event or {}),
-        ("next_relevant_news_countdown", recommendation.next_relevant_news_countdown or ""),
-        ("reasons", " | ".join(recommendation.reasons)),
-    ]
-    st.dataframe(pd.DataFrame(rows, columns=["field", "value"]), use_container_width=True, hide_index=True)
-
-
-def render_market_news_panel(recommendation: FinalRecommendation) -> None:
-    st.markdown("### Market and News Status")
-    with st.container(border=True):
-        st.write(f"**Market Status:** `{recommendation.market_status}`")
-        st.write(f"**News Status:** `{recommendation.news_status}`")
-        if recommendation.reasons:
-            for reason in recommendation.reasons:
-                st.markdown(f'<div class="reason-box">{reason}</div>', unsafe_allow_html=True)
-
-
-def render_strategy_diagnostics(recommendation: FinalRecommendation) -> None:
-    st.markdown("### Strategy Diagnostics")
-    strategy_names = [name.strip() for name in recommendation.selected_strategy.split("+") if name.strip()]
-    with st.container(border=True):
-        st.write(f"**Primary Strategy:** {strategy_names[0] if strategy_names else 'none'}")
-        st.write(f"**Contributing Strategies:** {', '.join(strategy_names) if strategy_names else 'n/a'}")
-        st.write("**Reasons:**")
-        for reason in recommendation.reasons:
-            st.markdown(f"- {reason}")
-
-
-def render_recent_recommendations(service: DashboardService) -> None:
-    st.markdown("### Recent Recommendations")
-    session_recent = pd.DataFrame(st.session_state.recommendation_history).tail(50).iloc[::-1]
-    recent = service.recent_recommendations(limit=50)
-    if recent.empty:
-        if session_recent.empty:
-            st.info("No recent recommendations saved yet.")
-            return
-        recent = session_recent
-    elif not session_recent.empty:
-        recent = pd.concat([session_recent, recent], ignore_index=True).drop_duplicates(subset=["timestamp", "symbol", "selected_strategy", "action"], keep="first")
-    keep_cols = [
-        "timestamp",
-        "symbol",
-        "action",
-        "signal_strength",
-        "confidence",
-        "selected_strategy",
-        "market_status",
-        "news_status",
-        "volatility_state",
-        "rejection_reason",
-    ]
-    st.dataframe(recent[keep_cols], use_container_width=True, hide_index=True)
-
-
-def render_paper_trading_panel(service: DashboardService) -> None:
-    st.markdown("### Paper Trading Panel")
-    trades = service.load_paper_trades(limit=50)
-    if trades.empty:
-        st.info("No paper trades found yet. Run 'Simulate Paper Trade Cycle' from the sidebar.")
-        return
-
-    pnl_total = float(trades["pnl"].astype(float).sum())
-    wins = int((trades["outcome"] == "WIN").sum())
-    losses = int((trades["outcome"] == "LOSS").sum())
-
-    m1, m2, m3 = st.columns(3)
-    m1.metric("Total PnL", f"{pnl_total:.5f}")
-    m2.metric("Wins", wins)
-    m3.metric("Losses", losses)
-
-    st.dataframe(trades, use_container_width=True, hide_index=True)
-
-
-def render_leaderboard(service: DashboardService) -> None:
-    st.markdown("### Leaderboard / Best Strategies (Per Symbol)")
-    board = service.strategy_leaderboard_by_symbol(min_trades=1)
-    if board.empty:
-        st.info("Leaderboard is empty. Generate paper trades to score strategies.")
-        return
-    keep = ["symbol", "strategy_name", "trades", "win_rate", "max_drawdown", "expectancy", "score"]
-    st.dataframe(board[keep], use_container_width=True, hide_index=True)
-
-
-def render_debug_panel() -> None:
-    with st.expander("Logs / Debug Panel", expanded=False):
-        if not st.session_state.debug_logs:
-            st.write("No debug logs yet.")
-            return
-        for line in st.session_state.debug_logs:
-            st.code(line)
-
-
-def render_placeholder() -> None:
-    with st.container(border=True):
-        st.markdown("### Live Recommendation Output")
-        st.info("Press **Get Recommendation** to analyze the selected market.")
-        st.caption("Once generated, action, risk levels, confidence, reasons, and status details will appear here.")
-
-
-def _state_badge(state: str) -> str:
-    safe = state.strip().lower().replace(" ", "_")
-    return f'<span class="badge badge-{safe}">{state.upper() if state else "UNKNOWN"}</span>'
-
-
-def render_learning_center(service: DashboardService, symbol: str, timeframe: str) -> None:
-    st.markdown("## Self-Learning Center")
-    st.caption("Transparent, persistence-backed control center for optimizer, validation, and paper-trade learning flow.")
-
-    fetch_cols = st.columns(5)
-    hist_symbol = fetch_cols[0].selectbox("History Symbol", COMMON_SYMBOLS, index=max(0, COMMON_SYMBOLS.index(symbol) if symbol in COMMON_SYMBOLS else 0))
-    hist_timeframe = fetch_cols[1].selectbox("History Timeframe", TIMEFRAMES, index=max(0, TIMEFRAMES.index(timeframe) if timeframe in TIMEFRAMES else 1))
-    lookback_unit = fetch_cols[2].selectbox("Lookback Unit", ["days", "weeks", "months"], index=0)
-    lookback_value = int(fetch_cols[3].number_input("Lookback Range", min_value=1, max_value=365, value=90, step=1))
-    if fetch_cols[4].button("Fetch Historical Data", use_container_width=True):
-        fetched, message = service.fetch_historical_data(hist_symbol, hist_timeframe, lookback_value, lookback_unit)
-        if fetched.empty:
-            st.warning(message)
-        else:
-            st.success(f"{message} Number of candles saved: {len(fetched)}")
-
-    controls = st.columns(8)
-    if controls[0].button("Run Historical Validation", use_container_width=True):
-        frame = service.run_historical_validation()
-        st.success(f"Historical validation refreshed ({len(frame)} rows).")
-    if controls[1].button("Run Optimizer Now", use_container_width=True):
-        frame = service.run_optimizer(symbol, timeframe)
-        st.success(f"Optimizer finished ({len(frame)} rows).")
-    if controls[2].button("Run Historical Learning", use_container_width=True):
-        frame = service.run_historical_learning(hist_symbol, hist_timeframe)
-        if "status" in frame.columns:
-            st.info(str(frame.iloc[0].get("message", "No data available")))
-        else:
-            st.success(f"Learning run success ({len(frame)} rows).")
-    if controls[3].button("Refresh Learning Data", use_container_width=True):
-        st.info("Learning datasets reloaded from local persistence.")
-    if controls[4].button("Evaluate Open Paper Trades", use_container_width=True):
-        _, message = service.evaluate_open_paper_trades()
-        st.info(message)
-    if controls[5].button("Promote Eligible Candidates", use_container_width=True):
-        promoted = service.promote_eligible_candidates()
-        st.success(f"Promoted {promoted} candidate(s).")
-    if controls[6].button("Recompute Leaderboards", use_container_width=True):
-        board = service.recompute_leaderboards()
-        st.success(f"Leaderboard rows: {len(board)}.")
-    if controls[7].button("Archive Disabled Strategies", use_container_width=True):
-        archived = service.archive_disabled_strategies()
-        st.success(f"Archived disabled rows: {archived}.")
-
-    payload = service.learning_center_payload()
-    active = payload["active"]
-    candidates = payload["candidates"]
-    changes = payload["state_changes_prepared"]
-    historical = payload["historical_validation"]
-    events = payload["events"]
-    best_config = payload["best_config"]
-    history_summary = service.historical_data_summary()
-    paper = service.load_paper_trades(limit=400)
-    health = payload["health"]
-
-    with st.expander("Filters", expanded=True):
-        fcols = st.columns(5)
-        symbol_options = ["ALL"] + sorted({*active.get("symbol", pd.Series(dtype=str)).astype(str).tolist(), *candidates.get("symbol", pd.Series(dtype=str)).astype(str).tolist()})
-        timeframe_options = ["ALL"] + sorted({*active.get("timeframe", pd.Series(dtype=str)).astype(str).tolist(), *candidates.get("timeframe", pd.Series(dtype=str)).astype(str).tolist()})
-        strategy_options = ["ALL"] + sorted({*active.get("strategy_name", pd.Series(dtype=str)).astype(str).tolist(), *candidates.get("strategy_name", pd.Series(dtype=str)).astype(str).tolist()})
-        state_options = ["ALL"] + sorted(set(active.get("strategy_state", pd.Series(dtype=str)).astype(str).tolist()))
-        selected_symbol = fcols[0].selectbox("Symbol", symbol_options, index=0)
-        selected_timeframe = fcols[1].selectbox("Timeframe", timeframe_options, index=0)
-        selected_strategy = fcols[2].selectbox("Strategy", strategy_options, index=0)
-        selected_state = fcols[3].selectbox("Strategy State", state_options, index=0)
-        date_range = fcols[4].date_input("Date range", value=[])
-
-    def _apply_filters(frame: pd.DataFrame, strategy_col: str = "strategy_name") -> pd.DataFrame:
-        filtered = frame.copy()
-        if filtered.empty:
-            return filtered
-        if selected_symbol != "ALL" and "symbol" in filtered.columns:
-            filtered = filtered[filtered["symbol"].astype(str) == selected_symbol]
-        if selected_timeframe != "ALL" and "timeframe" in filtered.columns:
-            filtered = filtered[filtered["timeframe"].astype(str) == selected_timeframe]
-        if selected_strategy != "ALL" and strategy_col in filtered.columns:
-            filtered = filtered[filtered[strategy_col].astype(str) == selected_strategy]
-        if selected_state != "ALL" and "strategy_state" in filtered.columns:
-            filtered = filtered[filtered["strategy_state"].astype(str) == selected_state]
-        if len(date_range) == 2 and "timestamp" in filtered.columns:
-            ts = pd.to_datetime(filtered["timestamp"], errors="coerce").dt.date
-            filtered = filtered[(ts >= date_range[0]) & (ts <= date_range[1])]
-        return filtered
-
-    active = _apply_filters(active)
-    candidates = _apply_filters(candidates)
-    changes = _apply_filters(changes, strategy_col="strategy")
-    historical = _apply_filters(historical, strategy_col="strategy")
-    events = _apply_filters(events, strategy_col="strategy")
-
-    tabs = st.tabs(["Overview", "Active/Candidates", "Historical", "Paper Trades", "Events", "Configurations"])
-
-    with tabs[0]:
-        m = st.columns(9)
-        m[0].metric("Learning Health", health["status"].upper(), delta=health["status_reason"])
-        m[1].metric("Active", health["active_strategies"])
-        m[2].metric("Candidates", health["candidate_strategies"])
-        m[3].metric("Disabled", health["disabled_strategies"])
-        m[4].metric("Open Paper Trades", health["open_paper_trades"])
-        m[5].metric("Completed Paper Trades", health["completed_paper_trades"])
-        m[6].metric("Last Optimizer", health["last_optimization_run"])
-        m[7].metric("Last Validation", health["last_historical_validation_run"])
-        m[8].metric("Last Paper Update", health["last_paper_trade_update"])
-        st.info(health["status_reason"])
-        st.markdown("### Stored Historical Market Data")
-        if history_summary.empty:
-            st.info("No data available")
-        else:
-            st.dataframe(history_summary, use_container_width=True, hide_index=True)
-
-    with tabs[1]:
-        st.markdown("### Active Strategies")
-        if active.empty:
-            st.info("No learning data yet. Run optimizer or paper trading to populate this section.")
-        else:
-            display = active.copy()
-            display["state_badge"] = display["strategy_state"].astype(str).map(lambda x: _state_badge(x))
-            display["trend"] = (pd.to_numeric(display["recent_score"], errors="coerce").fillna(0) - pd.to_numeric(display["historical_score"], errors="coerce").fillna(0)).map(lambda v: "⬆️ improving" if v >= 0 else "⬇️ degrading")
-            st.dataframe(
-                display[
-                    [
-                        "strategy_name",
-                        "symbol",
-                        "timeframe",
-                        "strategy_state",
-                        "historical_score",
-                        "recent_score",
-                        "combined_score",
-                        "learning_confidence",
-                        "trade_count",
-                        "win_rate",
-                        "expectancy",
-                        "max_drawdown",
-                        "last_promoted_time",
-                        "trend",
-                    ]
-                ],
-                use_container_width=True,
-                hide_index=True,
-            )
-
-        st.markdown("### Candidate Strategies (Not Yet Trusted Production Recommendations)")
-        if candidates.empty:
-            st.info("No learning data yet. Run optimizer or paper trading to populate this section.")
-        else:
-            show = candidates.copy()
-            show["eligibility_reason"] = show.apply(
-                lambda row: row["blocked_reason"] if str(row.get("promotion_eligibility", "")).lower() != "eligible" else "Eligible for promotion",
-                axis=1,
-            )
-            st.dataframe(
-                show[
-                    [
-                        "strategy_name",
-                        "symbol",
-                        "timeframe",
-                        "parameter_summary",
-                        "historical_score",
-                        "recent_score",
-                        "combined_score",
-                        "promotion_eligibility",
-                        "sample_size",
-                        "eligibility_reason",
-                    ]
-                ],
-                use_container_width=True,
-                hide_index=True,
-            )
-
-    with tabs[2]:
-        st.markdown("### Strategy State Changes")
-        if changes.empty:
-            st.info("No learning data yet.")
-        else:
-            st.dataframe(
-                changes[["timestamp", "strategy", "symbol", "previous_state", "new_state", "reason"]],
-                use_container_width=True,
-                hide_index=True,
-            )
-        st.markdown("### Historical Validation Metrics")
-        if historical.empty:
-            st.info("No learning data yet. Run optimizer or paper trading to populate this section.")
-        else:
-            st.dataframe(
-                historical[
-                    [
-                        "timestamp",
-                        "strategy",
-                        "symbol",
-                        "total_trades",
-                        "net_pnl",
-                        "win_rate",
-                        "drawdown",
-                        "profit_factor",
-                        "expectancy",
-                        "score",
-                    ]
-                ],
-                use_container_width=True,
-                hide_index=True,
-            )
-
-    with tabs[3]:
-        st.markdown("### Forward Paper Trading")
-        if paper.empty:
-            st.info("No learning data yet. Run optimizer or paper trading to populate this section.")
-        else:
-            open_trades = paper[paper["outcome"].astype(str).str.upper() == "OPEN"]
-            closed_trades = paper[paper["outcome"].astype(str).str.upper() != "OPEN"]
-            a, b = st.columns(2)
-            a.metric("Open Paper Trades", len(open_trades))
-            b.metric("Closed Paper Trades", len(closed_trades))
-            st.dataframe(
-                paper[
-                    [
-                        "symbol",
-                        "timeframe",
-                        "strategy_name",
-                        "entry",
-                        "exit_price",
-                        "pnl",
-                        "result",
-                        "signal_strength",
-                        "market_conditions",
-                        "news_status",
-                        "spread_state",
-                        "session_state",
-                    ]
-                ],
-                use_container_width=True,
-                hide_index=True,
-            )
-
-    with tabs[4]:
-        st.markdown("### Learning Event Log")
-        if events.empty:
-            st.info("No learning data yet.")
-        else:
-            st.dataframe(events[["timestamp", "event_type", "strategy", "symbol", "message"]], use_container_width=True, hide_index=True)
-
-    with tabs[5]:
-        st.markdown("### Best Configuration per Symbol")
-        if best_config.empty:
-            st.info("No learning data yet. Run optimizer or paper trading to populate this section.")
-        else:
-            st.dataframe(best_config, use_container_width=True, hide_index=True)
-
-
-@st.cache_data(ttl=40, show_spinner=False)
-def _load_chart_candles(symbol: str, timeframe: str, bars: int) -> tuple[pd.DataFrame, str]:
-    service = get_service()
-    return service.refresh_market_data(symbol, timeframe, bars=bars)
-
-
-@st.cache_data(ttl=120, show_spinner=False)
-def _load_chart_news(symbol: str) -> list[dict]:
-    service = get_service()
-    return service.recent_news_events(symbol)
-
-
-def render_market_visuals(service: DashboardService, symbol: str, timeframe: str, recommendation: FinalRecommendation | None) -> None:
-    st.markdown("## Market Visuals")
-    st.caption("Professional charting workspace for manual validation of recommendations and paper-trade context.")
-
-    c = st.columns(6)
-    candles = int(c[0].number_input("Candles", min_value=80, max_value=1200, value=260, step=20))
-    show_ema = c[1].toggle("EMAs", value=True)
+def render_chart(service: DashboardService, symbol: str, timeframe: str, recommendation: FinalRecommendation | None, expanded_chart: bool) -> None:
+    c = st.columns(7)
+    candles = int(c[0].number_input("Candles", min_value=120, max_value=1500, value=420, step=20))
+    show_ema = c[1].toggle("EMA", value=True)
     show_breakout = c[2].toggle("Breakout", value=True)
-    show_paper = c[3].toggle("Paper Trades", value=True)
-    show_recommendation = c[4].toggle("Recommendation", value=True)
-    show_news = c[5].toggle("News Markers", value=True)
-
+    show_paper = c[3].toggle("Paper", value=True)
+    show_news = c[4].toggle("News", value=True)
+    show_sr = c[5].toggle("S/R", value=False)
+    show_vol = c[6].toggle("Vol Zones", value=False)
     c2 = st.columns(4)
-    show_sessions = c2[0].toggle("Session Shading", value=False)
-    show_support_resistance = c2[1].toggle("S/R Levels", value=False)
-    show_volatility_zones = c2[2].toggle("Volatility Zones", value=False)
-    breakout_window = int(c2[3].slider("Breakout Window", min_value=10, max_value=80, value=20, step=2))
+    show_sessions = c2[0].toggle("Sessions", value=True)
+    show_volume = c2[1].toggle("Volume", value=True)
+    show_recommendation = c2[2].toggle("Signal Overlay", value=True)
+    breakout_window = int(c2[3].slider("Breakout Window", min_value=10, max_value=80, value=24, step=2))
 
     controls = ChartControls(
         candles=candles,
@@ -614,227 +193,161 @@ def render_market_visuals(service: DashboardService, symbol: str, timeframe: str
         show_recommendation=show_recommendation,
         show_sessions=show_sessions,
         show_news=show_news,
-        show_support_resistance=show_support_resistance,
-        show_volatility_zones=show_volatility_zones,
+        show_support_resistance=show_sr,
+        show_volatility_zones=show_vol,
+        show_volume=show_volume,
+        expanded_mode=expanded_chart,
         breakout_window=breakout_window,
     )
 
     candles_frame, market_msg = _load_chart_candles(symbol, timeframe, candles)
     if candles_frame.empty:
-        st.warning("No MT5 data available. Keep MT5 open and use Refresh Market Data in the sidebar.")
+        st.error("MT5 candle feed unavailable. Keep MT5 open for live chart updates.")
         st.caption(f"Details: {market_msg}")
         return
 
-    paper = service.load_paper_trades(limit=400)
+    paper = service.load_paper_trades(limit=600)
     if not paper.empty:
         paper = paper[(paper["symbol"].astype(str) == symbol) & (paper["timeframe"].astype(str).str.upper() == timeframe.upper())]
-    news_events = _load_chart_news(symbol) if show_news else []
-    payload = prepare_chart_payload(candles_frame, controls, recommendation=recommendation, paper_trades=paper, news_events=news_events)
+    payload = prepare_chart_payload(candles_frame, controls, recommendation=recommendation, paper_trades=paper, news_events=_load_chart_news(symbol) if show_news else [])
     if payload["status"] != "ok":
         st.info(payload["reason"])
         return
 
-    try:
-        fig = build_market_figure(payload, controls)
-        st.plotly_chart(fig, use_container_width=True, theme=None)
-    except RuntimeError as exc:
-        st.error(str(exc))
-        return
-
-    context = payload["context"]
-    st.markdown("### Visual Trade Context")
-    m = st.columns(7)
-    m[0].metric("Market Price", f"{float(context.get('market_price', 0.0)):.5f}")
-    m[1].metric("Entry Zone", context.get("entry_zone", "n/a"))
-    m[2].metric("SL Distance", context.get("stop_loss_distance", "n/a"))
-    m[3].metric("TP Distance", context.get("take_profit_distance", "n/a"))
-    m[4].metric("Risk / Reward", context.get("risk_reward", "n/a"))
-    m[5].metric("Signal Strength", str(context.get("signal_strength", "n/a")).upper())
-    m[6].metric("Strategy", context.get("selected_strategy", "n/a"))
-    note = context.get("note", "")
-    if note:
-        st.info(note)
-
-    if paper.empty:
-        st.caption("No paper trades for this symbol/timeframe yet. Run paper trade simulation to visualize entries/exits.")
+    st.plotly_chart(build_market_figure(payload, controls), use_container_width=True, theme=None)
 
 
-def sidebar_controls(service: DashboardService) -> tuple[str, str, bool, int, bool, bool]:
-    st.sidebar.header("Controls")
+def render_recommendation_panel(recommendation: FinalRecommendation | None) -> None:
+    panel = prepare_recommendation_panel(recommendation)
+    cls = "rec-active" if panel["state"] == "active" else "rec-blocked"
+    st.markdown(f"<div class='rec-card {cls}'><div class='small-muted'>Current Recommendation</div><h3 style='margin-top:0.2rem'>{panel['title']}</h3></div>", unsafe_allow_html=True)
+    for k, v in panel["fields"]:
+        st.metric(k.replace("_", " ").title(), v)
+    if panel.get("rejection_reason"):
+        st.warning(panel["rejection_reason"])
+    if panel["reasons"]:
+        with st.expander("Reasons", expanded=True):
+            for reason in panel["reasons"]:
+                st.markdown(f"- {reason}")
 
-    symbol = st.sidebar.selectbox("Symbol", COMMON_SYMBOLS, index=0)
-    timeframe = st.sidebar.selectbox("Timeframe", TIMEFRAMES, index=1)
 
-    quick = st.sidebar.columns(2)
-    if quick[0].button("EURUSD"):
-        symbol = "EURUSD"
-    if quick[1].button("XAUUSD"):
-        symbol = "XAUUSD"
+def render_bottom_panels(service: DashboardService) -> None:
+    tabs = st.tabs(["History", "Paper Trades", "Alerts", "Learning Activity"])
+    with tabs[0]:
+        recent_disk = service.recent_recommendations(limit=80)
+        recent = pd.DataFrame(st.session_state.recommendation_history)
+        merged = pd.concat([recent, recent_disk], ignore_index=True).drop_duplicates(subset=["timestamp", "symbol", "selected_strategy", "action"], keep="first") if not recent.empty else recent_disk
+        st.dataframe(merged.head(120), use_container_width=True, hide_index=True, height=280)
+    with tabs[1]:
+        paper = service.load_paper_trades(limit=120)
+        st.dataframe(paper if not paper.empty else pd.DataFrame([{"info": "No paper trades yet"}]), use_container_width=True, hide_index=True, height=280)
+    with tabs[2]:
+        alerts = prepare_alert_rows(service.recent_alert_events(limit=80), limit=80)
+        st.dataframe(alerts if not alerts.empty else pd.DataFrame([{"info": "No alerts yet"}]), use_container_width=True, hide_index=True, height=280)
+        st.caption(f"Telegram status: {st.session_state.latest_alert_status} | reason: {st.session_state.latest_alert_reason or 'n/a'}")
+    with tabs[3]:
+        payload = service.learning_center_payload()
+        health = payload["health"]
+        m = st.columns(6)
+        m[0].metric("Learning Health", str(health.get("status", "n/a")).upper())
+        m[1].metric("Active Strategies", health.get("active_strategies", 0))
+        m[2].metric("Candidates", health.get("candidate_strategies", 0))
+        m[3].metric("Disabled", health.get("disabled_strategies", 0))
+        m[4].metric("Last Optimization", health.get("last_optimization_run", "n/a"))
+        m[5].metric("Last Validation", health.get("last_historical_validation_run", "n/a"))
+        st.dataframe(payload["events"].head(80), use_container_width=True, hide_index=True, height=240)
 
-    get_recommendation = st.sidebar.button("Get Recommendation", type="primary", use_container_width=True)
-    auto_refresh = st.sidebar.toggle("Auto Refresh", value=False)
-    watch_mode = st.sidebar.toggle("Watch Mode (Alerts)", value=False)
-    interval = int(st.sidebar.number_input("Refresh interval (seconds)", min_value=5, max_value=3600, value=300, step=5))
 
-    if st.sidebar.button("Run Optimizer", use_container_width=True):
-        table = service.run_optimizer(symbol, timeframe)
-        st.session_state.optimizer_table = table
-        log_debug(f"Optimizer executed for {symbol}/{timeframe} ({len(table)} rows).")
+def sidebar_controls() -> None:
+    st.sidebar.markdown("## Terminal Controls")
+    st.session_state.selected_symbol = st.sidebar.selectbox("Active Symbol", COMMON_SYMBOLS, index=max(0, COMMON_SYMBOLS.index(st.session_state.selected_symbol)))
+    st.session_state.selected_timeframe = st.sidebar.selectbox("Timeframe", TIMEFRAMES, index=max(0, TIMEFRAMES.index(st.session_state.selected_timeframe)))
+    st.session_state.compact_mode = st.sidebar.toggle("Compact mode", value=st.session_state.compact_mode)
+    st.session_state.expanded_chart = st.sidebar.toggle("Expanded chart", value=st.session_state.expanded_chart)
+    st.session_state.watch_mode = st.sidebar.toggle("Watch mode", value=st.session_state.watch_mode)
+    st.session_state.auto_refresh = st.sidebar.toggle("Auto refresh", value=st.session_state.auto_refresh)
+    st.session_state.refresh_interval = int(st.sidebar.number_input("Live refresh (seconds)", min_value=3, max_value=3600, value=int(st.session_state.refresh_interval), step=1))
+    st.session_state.run_now = st.sidebar.button("Run cycle now", type="primary", use_container_width=True)
 
-    if st.sidebar.button("Refresh Market Data", use_container_width=True):
-        snapshot, message = service.refresh_market_data(symbol, timeframe)
-        st.session_state.market_snapshot = snapshot.tail(100)
-        log_debug(f"Refresh market data: {message}")
-        if snapshot.empty:
-            st.sidebar.warning(message)
-        else:
-            st.sidebar.success(message)
 
-    if st.sidebar.button("Simulate Paper Trade Cycle", use_container_width=True):
-        simulated, message = service.simulate_paper_trade_cycle(symbol, timeframe)
-        st.session_state.simulated_trades = simulated
-        if simulated.empty:
-            st.sidebar.warning(message)
-        else:
-            st.sidebar.success(message)
-        log_debug(f"Paper trade simulation: {message}")
+def handle_refresh() -> None:
+    if st.session_state.auto_refresh:
+        interval_ms = int(st.session_state.refresh_interval) * 1000
+        try:
+            from streamlit_autorefresh import st_autorefresh  # type: ignore
 
-    with st.sidebar.expander("Advanced Settings", expanded=False):
-        st.write("Settings file:", service.settings_path)
-        if st.button("Reload Settings", use_container_width=True):
-            service.refresh_settings()
-            st.success("Settings reloaded")
-            log_debug("Settings reloaded")
-
-    return symbol, timeframe, get_recommendation, interval, auto_refresh, watch_mode
+            st_autorefresh(interval=interval_ms, key="terminal_live_refresh")
+        except Exception:
+            st.markdown(f"<meta http-equiv='refresh' content='{st.session_state.refresh_interval}'>", unsafe_allow_html=True)
 
 
 def main() -> None:
     ensure_state()
     service = get_service()
+    st.markdown(THEME_CSS, unsafe_allow_html=True)
+    st.markdown("## AITrader Live Trading Terminal")
+    st.caption("Local-first • MT5 market data • recommendation-only • paper-trading-only")
 
-    symbol, timeframe, do_run, interval, auto_refresh, watch_mode = sidebar_controls(service)
+    sidebar_controls()
 
-    status, reason = service.connection_status(symbol, timeframe)
-    connection_text = "connected" if status != "mt5_unavailable" else "unavailable"
-    render_header()
+    state = prepare_live_update_state(
+        {
+            "symbol": st.session_state.selected_symbol,
+            "timeframe": st.session_state.selected_timeframe,
+            "refresh_interval": st.session_state.refresh_interval,
+        },
+        symbol=st.session_state.selected_symbol,
+        timeframe=st.session_state.selected_timeframe,
+        refresh_interval=st.session_state.refresh_interval,
+        watch_mode=st.session_state.watch_mode,
+        auto_refresh=st.session_state.auto_refresh,
+        compact_mode=st.session_state.compact_mode,
+        expanded_chart=st.session_state.expanded_chart,
+    )
 
-    should_run_cycle = bool(do_run or auto_refresh)
-    st.session_state.monitoring_state = "running" if should_run_cycle and watch_mode else "idle"
-    if should_run_cycle:
-        recommendation = service.generate_recommendation(symbol, timeframe)
-        recommendation = normalize_recommendation(recommendation)
-        st.session_state.last_recommendation = recommendation
-        now = datetime.now(timezone.utc)
-        st.session_state.last_refresh = now.isoformat(timespec="seconds")
-        st.session_state.last_refresh_label = now.strftime("%Y-%m-%d %H:%M:%S UTC")
-        history = st.session_state.recommendation_history
-        history.append(
-            {
-                "timestamp": recommendation.timestamp.replace(tzinfo=timezone.utc).isoformat(timespec="seconds"),
-                "symbol": recommendation.symbol,
-                "action": recommendation.action.value if hasattr(recommendation.action, "value") else str(recommendation.action),
-                "confidence": recommendation.confidence,
-                "selected_strategy": recommendation.selected_strategy,
-                "market_status": recommendation.market_status,
-                "news_status": recommendation.news_status,
-            }
-        )
-        st.session_state.recommendation_history = history[-100:]
-        log_debug(f"Recommendation generated for {symbol}/{timeframe}: action={recommendation.action}")
-        if watch_mode:
-            alert_status, alert_reason, triggered, alert_type = service.evaluate_and_send_alert(recommendation)
-            service.persist_alert_event(recommendation, alert_status, alert_reason, triggered, alert_type)
-            st.session_state.latest_alert_status = alert_status
-            st.session_state.latest_alert_reason = alert_reason
-            st.session_state.current_recommendation_triggered_alert = triggered
-            st.session_state.alert_suppressed_reason = alert_reason if alert_status == "suppressed" else ""
-            if alert_status == "sent":
-                st.session_state.last_sent_alert_timestamp = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
-        else:
-            st.session_state.latest_alert_status = "not_evaluated"
-            st.session_state.latest_alert_reason = "watch mode disabled"
-            st.session_state.current_recommendation_triggered_alert = False
+    if st.session_state.run_now or st.session_state.auto_refresh:
+        st.session_state.monitoring_state = "running" if state.watch_mode else "polling"
+        run_cycle(service, state.symbol, state.timeframe, state.watch_mode)
+    else:
+        st.session_state.monitoring_state = "idle"
 
-    rec: FinalRecommendation = st.session_state.last_recommendation
-    page_tabs = st.tabs(["Trading Cockpit", "Market Visuals", "Self-Learning Center"])
-    with page_tabs[0]:
-        render_status_cards(connection_text, rec)
-        st.caption(
-            f"Monitoring state: **{st.session_state.monitoring_state}** | "
-            f"Latest alert reason: `{st.session_state.latest_alert_reason or 'n/a'}` | "
-            f"Triggered this cycle: `{st.session_state.current_recommendation_triggered_alert}` | "
-            f"Suppressed reason: `{st.session_state.alert_suppressed_reason or 'n/a'}`"
-        )
+    rec = st.session_state.last_recommendation
+    _, snapshots = render_watchlist(service, COMMON_SYMBOLS, state.timeframe, st.session_state.recommendations_by_symbol)
+    render_status_strip(rec, state.symbol, state.timeframe, snapshots)
+
+    if rec and rec.market_status == "mt5_unavailable":
+        st.error("⚠️ MT5 is unavailable. Dashboard remains live but recommendations are forced to NO_TRADE.")
+    if rec and rec.market_status == "closed":
+        st.warning("🚫 Market is closed for active symbol/timeframe.")
+
+    left, center, right = st.columns([1.05, 2.65 if state.expanded_chart else 2.15, 1.15], gap="small")
+
+    with left:
+        st.markdown("### Watchlist")
+        for sym in COMMON_SYMBOLS:
+            if st.button(sym, key=f"jump_{sym}", use_container_width=True):
+                st.session_state.selected_symbol = sym
+                st.rerun()
+        st.caption(f"Monitoring: {st.session_state.monitoring_state} • Last refresh: {st.session_state.last_refresh_label}")
+
+    with center:
+        st.markdown("### Market Workspace")
+        render_chart(service, state.symbol, state.timeframe, rec, state.expanded_chart)
+
+    with right:
+        st.markdown("### Intelligence")
+        render_recommendation_panel(rec)
+        if rec is not None:
+            st.metric("Market Status", rec.market_status)
+            st.metric("News Status", rec.news_status)
+            st.metric("Spread State", rec.spread_state)
+            st.metric("Symbol Profile", rec.symbol_profile)
+
+    if not state.compact_mode:
         st.markdown("---")
-        if (rec and rec.market_status == "mt5_unavailable") or (rec is None and status == "mt5_unavailable"):
-            st.error(
-                "⚠️ MT5 IS UNAVAILABLE — recommendation generation is forced to NO_TRADE until MT5 reconnects."
-            )
+        render_bottom_panels(service)
 
-        main_left, main_right = st.columns([1.6, 1], gap="medium")
-        with main_left:
-            if rec is None:
-                if status == "mt5_unavailable":
-                    st.error("⚠️ MT5 unavailable — please open MetaTrader 5 and retry.")
-                render_placeholder()
-            else:
-                if rec.market_status == "mt5_unavailable":
-                    st.error("⚠️ MT5 unavailable — recommendation quality is limited until MT5 is reachable.")
-                if rec.market_status == "closed":
-                    st.warning("🚫 Market Closed — recommendation forced to NO_TRADE.")
-                render_recommendation_summary(rec)
-                render_recommendation_detail_table(rec)
-
-        with main_right:
-            if rec is None:
-                with st.container(border=True):
-                    st.markdown("### Strategy Diagnostics")
-                    st.info("Run one recommendation cycle to populate diagnostics and reason traces.")
-                with st.container(border=True):
-                    st.markdown("### Market and News Status")
-                    st.info("Market/news status and rationale are shown after a recommendation run.")
-            else:
-                render_strategy_diagnostics(rec)
-                render_market_news_panel(rec)
-                if not st.session_state.optimizer_table.empty:
-                    st.markdown("### Latest Optimizer Run")
-                    st.dataframe(st.session_state.optimizer_table, use_container_width=True, hide_index=True, height=260)
-
-        st.markdown("---")
-        col_history, col_paper, col_leader = st.columns([1.2, 1.2, 1], gap="medium")
-
-        with col_history:
-            render_recent_recommendations(service)
-            if not st.session_state.market_snapshot.empty:
-                st.markdown("### Latest Market Data Snapshot")
-                st.dataframe(st.session_state.market_snapshot, use_container_width=True, hide_index=True, height=240)
-
-        with col_paper:
-            render_paper_trading_panel(service)
-            if not st.session_state.simulated_trades.empty:
-                st.markdown("### Last Simulation Result")
-                st.dataframe(st.session_state.simulated_trades, use_container_width=True, hide_index=True, height=240)
-
-        with col_leader:
-            render_leaderboard(service)
-            alerts = service.recent_alert_events(limit=25)
-            st.markdown("### Alert History")
-            if alerts.empty:
-                st.info("No alert events yet.")
-            else:
-                st.dataframe(alerts, use_container_width=True, hide_index=True, height=220)
-            render_debug_panel()
-
-    with page_tabs[1]:
-        render_market_visuals(service, symbol, timeframe, rec)
-
-    with page_tabs[2]:
-        render_learning_center(service, symbol, timeframe)
-
-    if auto_refresh:
-        st.caption(f"Auto refresh enabled. Next refresh in {interval} seconds. Watch mode: {watch_mode}.")
-        st.markdown(f"<meta http-equiv='refresh' content='{interval}'>", unsafe_allow_html=True)
+    handle_refresh()
 
 
 if __name__ == "__main__":
