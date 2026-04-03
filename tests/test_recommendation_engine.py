@@ -77,12 +77,11 @@ def test_aggregate_excludes_very_weak_strategies() -> None:
     )
 
     assert rec.final_action == SignalAction.BUY
-    assert rec.strategy_name == "trend_rsi"
-    assert rec.selected_strategy_name == "trend_rsi"
+    assert rec.selected_strategy == "trend_rsi"
     assert rec.news_status == "clear"
     assert rec.market_price == 1.251
     assert rec.timestamp == timestamp
-    assert rec.risk_reward_ratio > 0
+    assert rec.risk_reward > 0
     assert any("excluded due to weak recent performance" in reason for reason in rec.reasons)
 
 
@@ -102,6 +101,9 @@ def test_format_for_terminal_contains_core_fields() -> None:
 
     assert "FINAL RECOMMENDATION" in formatted
     assert "Market Status" in formatted
+    assert "Symbol            :" in formatted
+    assert "Timeframe         :" in formatted
+    assert "Timestamp (UTC)" in formatted
     assert "Action            :" in formatted
     assert "News Status" in formatted
     assert "REASONS" in formatted
@@ -185,7 +187,7 @@ def test_generate_market_open_status() -> None:
     rec = engine.generate("EURUSD", "M5")
 
     assert rec.market_status == "open"
-    assert rec.final_action == SignalAction.BUY
+    assert rec.action == SignalAction.BUY
     assert rec.entry > 0
     assert rec.confidence > 0
 
@@ -196,7 +198,7 @@ def test_generate_market_closed_status_forces_no_trade() -> None:
     rec = engine.generate("EURUSD", "M5")
 
     assert rec.market_status == "closed"
-    assert rec.final_action == SignalAction.NO_TRADE
+    assert rec.action == SignalAction.NO_TRADE
     assert "market is closed" in rec.reasons[0].lower()
     assert rec.entry == 0.0
     assert rec.stop_loss == 0.0
@@ -210,7 +212,7 @@ def test_generate_symbol_unavailable_market_status() -> None:
     rec = engine.generate("BADSYMBOL", "M5")
 
     assert rec.market_status == "unavailable"
-    assert rec.final_action == SignalAction.NO_TRADE
+    assert rec.action == SignalAction.NO_TRADE
 
 
 def test_generate_mt5_unavailable_market_status() -> None:
@@ -219,4 +221,64 @@ def test_generate_mt5_unavailable_market_status() -> None:
     rec = engine.generate("EURUSD", "M5")
 
     assert rec.market_status == "mt5_unavailable"
-    assert rec.final_action == SignalAction.NO_TRADE
+    assert rec.action == SignalAction.NO_TRADE
+
+
+def test_aggregate_forces_no_trade_when_market_not_open() -> None:
+    engine = _engine()
+    signal = StrategySignal("trend_rsi", SignalAction.BUY, 1.25, 1.24, 1.27, 0.8, ["trend aligned"])
+
+    rec = engine._aggregate(
+        "EURUSD",
+        "M5",
+        [(signal, None)],
+        market_price=1.251,
+        market_status="closed",
+        news_status="clear",
+    )
+
+    assert rec.action == SignalAction.NO_TRADE
+    assert rec.market_status == "closed"
+    assert rec.entry == 0.0
+
+
+def test_aggregate_forces_no_trade_when_news_blocked() -> None:
+    engine = _engine()
+    signal = StrategySignal("trend_rsi", SignalAction.BUY, 1.25, 1.24, 1.27, 0.8, ["trend aligned"])
+
+    rec = engine._aggregate(
+        "EURUSD",
+        "M5",
+        [(signal, None)],
+        market_price=1.251,
+        market_status="open",
+        news_status="blocked",
+        news_reason="NFP blackout",
+    )
+
+    assert rec.action == SignalAction.NO_TRADE
+    assert rec.news_status == "blocked"
+    assert any("blocked trading" in reason.lower() for reason in rec.reasons)
+
+
+def test_final_recommendation_has_operator_output_fields() -> None:
+    engine = _engine()
+    signal = StrategySignal("trend_rsi", SignalAction.BUY, 1.25, 1.24, 1.27, 0.8, ["trend aligned"])
+    rec = engine._aggregate("EURUSD", "M5", [(signal, None)], market_price=1.251)
+
+    assert set(rec.__dataclass_fields__.keys()) == {
+        "symbol",
+        "timeframe",
+        "action",
+        "market_price",
+        "entry",
+        "stop_loss",
+        "take_profit",
+        "risk_reward",
+        "confidence",
+        "selected_strategy",
+        "market_status",
+        "news_status",
+        "reasons",
+        "timestamp",
+    }
