@@ -1,10 +1,13 @@
+"use client";
+
 import { AlertsHistoryPanel } from "@/features/alerts/components/alerts-history-panel";
 import { LiveChartWorkspace } from "@/features/charts/components/live-chart-workspace";
 import { LearningCenterPanel } from "@/features/learning/components/learning-center-panel";
 import { RecommendationSidePanel } from "@/features/recommendations/components/recommendation-side-panel";
+import { I18nProvider } from "@/features/shared/i18n";
 import { WatchlistPanel } from "@/features/watchlist/components/watchlist-panel";
 
-export default function HomePage() {
+function TerminalPage() {
   return (
     <main className="terminal-grid">
       <section className="panel watchlist">
@@ -25,5 +28,13 @@ export default function HomePage() {
         </div>
       </section>
     </main>
+  );
+}
+
+export default function HomePage() {
+  return (
+    <I18nProvider>
+      <TerminalPage />
+    </I18nProvider>
   );
 }

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from fastapi import APIRouter, Depends
+import pandas as pd
 
 from api.dependencies import get_dashboard_service
 from api.schemas import (
@@ -20,9 +21,15 @@ router = APIRouter(prefix="/learning", tags=["learning"])
 @router.get("/center")
 def learning_center(service: DashboardService = Depends(get_dashboard_service)) -> dict:
     payload = service.learning_center_payload()
-    payload["events"] = payload.get("events", []).to_dict(orient="records")
-    payload["health"] = dict(payload.get("health", {}))
-    return payload
+    serialized: dict = {}
+    for key, value in payload.items():
+        if isinstance(value, pd.DataFrame):
+            serialized[key] = value.to_dict(orient="records")
+        elif isinstance(value, dict):
+            serialized[key] = dict(value)
+        else:
+            serialized[key] = value
+    return serialized
 
 
 @router.post("/history/fetch", response_model=HistoricalFetchResponse)
