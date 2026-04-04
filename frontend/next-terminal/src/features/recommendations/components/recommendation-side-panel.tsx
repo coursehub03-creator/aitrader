@@ -1,8 +1,13 @@
+"use client";
+
+import { useI18n } from "@/features/shared/i18n";
+
 export function RecommendationSidePanel() {
+  const { t } = useI18n();
   return (
     <>
-      <h2>Recommendation Panel</h2>
-      <p>Action, confidence, strategy rationale, SL/TP context.</p>
+      <h2>{t("recommendations.title")}</h2>
+      <p>{t("recommendations.subtitle")}</p>
     </>
   );
 }

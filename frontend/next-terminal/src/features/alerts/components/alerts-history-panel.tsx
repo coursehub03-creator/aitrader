@@ -1,8 +1,13 @@
+"use client";
+
+import { useI18n } from "@/features/shared/i18n";
+
 export function AlertsHistoryPanel() {
+  const { t } = useI18n();
   return (
     <>
-      <h2>Alerts & History</h2>
-      <p>Live alert feed, suppression reasons, and terminal event history.</p>
+      <h2>{t("alerts.title")}</h2>
+      <p>{t("alerts.subtitle")}</p>
     </>
   );
 }

@@ -1,8 +1,13 @@
+"use client";
+
+import { useI18n } from "@/features/shared/i18n";
+
 export function LiveChartWorkspace() {
+  const { t } = useI18n();
   return (
     <>
-      <h2>Live Chart Workspace</h2>
-      <p>TradingView-like workspace placeholder. Integrate lightweight-charts now, TradingView widget later if licensed.</p>
+      <h2>{t("charts.title")}</h2>
+      <p>{t("charts.subtitle")}</p>
     </>
   );
 }
