@@ -18,6 +18,7 @@ from core.types import FinalRecommendation, SignalAction
 from monitoring.live_monitor import MonitorState, to_utc_label
 from ui.charting import ChartControls, build_market_figure, prepare_chart_payload
 from ui.dashboard_service import DashboardService
+from ui.learning_center import build_learning_diagnostics
 from ui.terminal_view_model import (
     prepare_alert_rows,
     prepare_live_update_state,
@@ -441,8 +442,120 @@ def render_self_learning_center(service: DashboardService) -> None:
             st.warning(message)
 
     payload = service.learning_center_payload()
+    selected_symbol = str(st.session_state.get("selected_symbol", "EURUSD"))
+    selected_timeframe = str(st.session_state.get("selected_timeframe", "M5"))
+    market_status, _market_detail = service.connection_status(selected_symbol, selected_timeframe)
+    diagnostics = build_learning_diagnostics(
+        active=payload["active"],
+        candidates=payload["candidates"],
+        paper_trades=service.load_paper_trades(limit=500),
+        historical_validation=payload["historical_validation"],
+        state_changes=payload["state_changes_prepared"],
+        events=payload["events"],
+        market_status=market_status,
+    )
     inventory = service.historical_data_summary()
     has_history = not inventory.empty
+
+    st.markdown("## Learning Diagnostics Summary")
+    st.caption("Operator-grade diagnostics for learning trend, confidence, and evidence quality.")
+    summary = diagnostics["summary_metrics"]
+    cards_a = st.columns(5, gap="small")
+    cards_a[0].metric("Total Paper Trades", int(summary["total_paper_trades"]))
+    cards_a[1].metric("Win Rate", f"{float(summary['win_rate']) * 100:.1f}%")
+    cards_a[2].metric("Net PnL", f"{float(summary['net_pnl']):.2f}")
+    cards_a[3].metric("Max Drawdown", f"{float(summary['max_drawdown']):.2f}")
+    pf = summary["profit_factor"]
+    cards_a[4].metric("Profit Factor", "∞" if pf == float("inf") else f"{float(pf):.2f}")
+
+    cards_b = st.columns(6, gap="small")
+    cards_b[0].metric("Open Paper Trades", int(summary["open_paper_trades"]))
+    cards_b[1].metric("Closed Paper Trades", int(summary["closed_paper_trades"]))
+    cards_b[2].metric("Loss Rate", f"{float(summary['loss_rate']) * 100:.1f}%")
+    cards_b[3].metric("Avg PnL", f"{float(summary['average_pnl']):.3f}")
+    cards_b[4].metric("Expectancy", f"{float(summary['expectancy']):.3f}")
+    cards_b[5].metric("Best Active Strategy Count", int(diagnostics["strategy_state_counts"].get("active", 0)))
+
+    cards_c = st.columns(3, gap="small")
+    cards_c[0].metric("Learning Trend", diagnostics["trend_status"].replace("_", " ").upper())
+    cards_c[1].metric("Learning Health", diagnostics["learning_health"].replace("_", " ").upper())
+    cards_c[2].metric("System Readiness", diagnostics["readiness"]["status"].replace("_", " ").upper())
+    st.caption(diagnostics["trend_reason"])
+    st.caption(f"Readiness rationale: {diagnostics['readiness']['reason']}")
+
+    st.markdown("### Market-Aware Learning Context")
+    if market_status == "closed":
+        st.info("Market is closed today. No new live/paper opportunities are expected; this is not treated as degradation.")
+    elif market_status == "open":
+        st.success("Market is open. New forward paper-trade evidence can accumulate in monitor mode.")
+    else:
+        st.caption(f"Market status for {selected_symbol}/{selected_timeframe}: {market_status}.")
+
+    if int(summary["total_paper_trades"]) == 0:
+        st.info(
+            "No paper trades yet: historical learning can still exist, but forward learning is not established yet. "
+            "Run Historical Validation + Symbol Optimizer, then wait for market open and start monitor mode."
+        )
+
+    st.markdown("### Rolling Performance Analysis")
+    rolling = diagnostics["rolling_performance"]
+    roll_df = pd.DataFrame(
+        [
+            {"window": "Last 20", **rolling["last_20"]},
+            {"window": "Last 50", **rolling["last_50"]},
+            {"window": "Last 100", **rolling["last_100"]},
+        ]
+    )
+    st.dataframe(roll_df, use_container_width=True, hide_index=True, height=180)
+    st.caption(f"Recent vs long-term classification: {diagnostics['trend_status']}")
+
+    st.markdown("### Warning & Attention Panel")
+    warning_cards = diagnostics["warnings"]
+    if warning_cards:
+        for item in warning_cards:
+            msg = f"**{item['title']}** — {item['message']}"
+            if item["severity"] == "critical":
+                st.error(msg)
+            elif item["severity"] == "warning":
+                st.warning(msg)
+            else:
+                st.info(msg)
+    else:
+        st.success("No active warning conditions detected.")
+
+    st.markdown("### Learning Evidence Quality")
+    evidence = diagnostics["evidence_quality"]
+    q = st.columns(5, gap="small")
+    q[0].metric("Historical Evidence", str(evidence["historical_evidence_quality"]).upper())
+    q[1].metric("Forward Evidence", str(evidence["forward_evidence_quality"]).upper())
+    q[2].metric("Combined Evidence", str(evidence["combined_evidence_quality"]).upper())
+    q[3].metric("Sample Sufficiency", str(evidence["sample_sufficiency"]).upper())
+    q[4].metric("Confidence Basis", str(evidence["confidence_basis"]).replace("_", "+").upper())
+
+    st.markdown("### Recent Learning Changes")
+    changes = diagnostics["recent_learning_changes"]
+    c = st.columns(6, gap="small")
+    c[0].metric("Promoted", int(changes["promoted_strategies"]))
+    c[1].metric("Demoted", int(changes["demoted_strategies"]))
+    c[2].metric("Disabled", int(changes["disabled_strategies"]))
+    c[3].metric("To Probation", int(changes["moved_to_probation"]))
+    c[4].metric("Best Params Changed", int(changes["best_params_changed"]))
+    c[5].metric("Optimizer Improvements", int(changes["optimizer_improvements"]))
+
+    st.markdown("### Best Strategy per Symbol")
+    best_symbol = diagnostics["best_strategy_per_symbol"]
+    st.dataframe(
+        best_symbol if not best_symbol.empty else pd.DataFrame([{"info": "No strategy ranking yet. Run Symbol Optimizer after historical validation."}]),
+        use_container_width=True,
+        hide_index=True,
+        height=220,
+    )
+
+    st.markdown("### Strategy Lifecycle Visibility")
+    state_counts = diagnostics["strategy_state_counts"]
+    s_cols = st.columns(5, gap="small")
+    for idx, key in enumerate(["active", "candidate", "probation", "disabled", "archived"]):
+        s_cols[idx].metric(key.title(), int(state_counts.get(key, 0)))
 
     st.markdown("### Historical Learning Panels")
     row_a, row_b = st.columns(2, gap="small")
@@ -586,6 +699,22 @@ def render_self_learning_center(service: DashboardService) -> None:
     with row_one_right:
         st.markdown("### Candidate Strategies")
         st.dataframe(payload["candidates"], use_container_width=True, hide_index=True, height=250)
+
+    st.markdown("### Strategy State Tables")
+    all_strategies = pd.concat([payload["active"], payload["candidates"]], ignore_index=True)
+    if not all_strategies.empty:
+        all_strategies["strategy_state"] = all_strategies.get("strategy_state", "").astype(str).str.lower()
+    state_panels = st.columns(5, gap="small")
+    for idx, state_name in enumerate(["active", "candidate", "probation", "disabled", "archived"]):
+        with state_panels[idx]:
+            st.markdown(f"#### {state_name.title()}")
+            subset = all_strategies[all_strategies["strategy_state"] == state_name] if not all_strategies.empty else pd.DataFrame()
+            st.dataframe(
+                subset if not subset.empty else pd.DataFrame([{"info": f"No {state_name} strategies"}]),
+                use_container_width=True,
+                hide_index=True,
+                height=220,
+            )
 
     row_two_left, row_two_right = st.columns(2, gap="small")
     with row_two_left:

@@ -6,8 +6,13 @@ import pandas as pd
 
 from ui.learning_center import (
     LEARNING_DATASET_SCHEMAS,
+    build_learning_diagnostics,
+    classify_learning_trend,
+    classify_readiness,
     compute_learning_health_summary,
+    compute_rolling_performance,
     extract_best_configuration_per_symbol,
+    generate_learning_warnings,
     load_learning_data,
     prepare_state_changes,
     safe_read_csv,
@@ -141,3 +146,63 @@ def test_load_learning_data_handles_malformed_metadata_json(tmp_path) -> None:
     metadata_path.write_text("{ broken", encoding="utf-8")
     payload = load_learning_data(tmp_path)
     assert payload["metadata"] == {}
+
+
+def test_rolling_performance_summary() -> None:
+    rows = []
+    for i in range(1, 121):
+        rows.append({"outcome": "WIN" if i % 3 else "LOSS", "pnl": 1.5 if i % 3 else -1.0, "close_time": f"2026-01-{(i % 28) + 1:02d}T00:00:00+00:00"})
+    rolling = compute_rolling_performance(pd.DataFrame(rows))
+    assert rolling["last_20"]["trades"] == 20
+    assert rolling["last_50"]["trades"] == 50
+    assert rolling["last_100"]["trades"] == 100
+
+
+def test_learning_trend_classification_market_closed_waiting() -> None:
+    trend, reason = classify_learning_trend(
+        historical_score=0.62,
+        recent_score=0.64,
+        combined_score=0.63,
+        rolling={"last_20": {"average_pnl": 0.2}, "last_50": {"average_pnl": 0.1}, "last_100": {"average_pnl": 0.1, "trades": 10}},
+        closed_paper_trades=8,
+        market_status="closed",
+    )
+    assert trend == "market_closed_waiting"
+    assert "Market closed" in reason
+
+
+def test_readiness_classification_stable_monitored_use() -> None:
+    status, reason = classify_readiness(
+        metrics={"closed_paper_trades": 75},
+        trend_status="stable",
+        combined_score=0.66,
+        forward_quality="strong",
+    )
+    assert status == "stable_enough_for_monitored_use"
+    assert "Evidence quality" in reason
+
+
+def test_warning_generation_and_no_paper_trades_empty_state() -> None:
+    warnings = generate_learning_warnings(
+        metrics={"total_paper_trades": 0, "closed_paper_trades": 0, "max_drawdown": 0.0, "expectancy": 0.0},
+        rolling={"last_20": {"trades": 0}},
+        trend_status="insufficient_data",
+        market_status="closed",
+    )
+    titles = {w["title"] for w in warnings}
+    assert "No paper trades yet" in titles
+    assert "Market closed context" in titles
+
+
+def test_market_closed_learning_context_in_diagnostics() -> None:
+    diagnostics = build_learning_diagnostics(
+        active=pd.DataFrame([{"symbol": "EURUSD", "strategy_name": "trend_rsi", "historical_score": 0.7, "recent_score": 0.7, "combined_score": 0.7, "strategy_state": "active", "trade_count": 3, "learning_confidence": 0.5}]),
+        candidates=pd.DataFrame(columns=["strategy_name"]),
+        paper_trades=pd.DataFrame(columns=["outcome", "pnl"]),
+        historical_validation=pd.DataFrame([{"symbol": "EURUSD"}]),
+        state_changes=pd.DataFrame(columns=["event_type", "new_state"]),
+        events=pd.DataFrame(columns=["message"]),
+        market_status="closed",
+    )
+    assert diagnostics["trend_status"] in {"market_closed_waiting", "insufficient_data"}
+    assert diagnostics["evidence_quality"]["sample_sufficiency"] == "insufficient"
