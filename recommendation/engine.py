@@ -385,6 +385,9 @@ class RecommendationEngine:
         weak_cutoff = float(self.settings.get("learning.weak_strategy_score_cutoff", 1.0))
         weak_reduction = max(0.0, float(self.settings.get("learning.weak_strategy_confidence_multiplier", 0.75)))
 
+        strategy_scores: list[float] = []
+        recent_performance_scores: list[float] = []
+
         for signal, score in selected:
             perf_weight = 1.0
             if score is not None and score.score < weak_cutoff:
@@ -401,6 +404,9 @@ class RecommendationEngine:
             tp_vals.append(signal.take_profit)
             reasons.append(f"{signal.strategy_name}: {signal.reason}")
             names.append(signal.strategy_name)
+            if score is not None:
+                strategy_scores.append(float(score.score))
+                recent_performance_scores.append(float(score.win_rate))
 
         if not names:
             return self._no_trade(symbol, timeframe, "No strategies available after aggregation", news_status, market_status, timestamp or datetime.utcnow(), market_price, self._mt5_connection_status(), symbol_profile=symbol_profile, session_state=session_state, spread_state=spread_state, spread_value=spread_value)
@@ -440,6 +446,8 @@ class RecommendationEngine:
             spread_value=spread_value,
             mt5_connection_status=mt5_connection_status or self._mt5_connection_status(),
             signal_strength=signal_strength,
+            strategy_score=(sum(strategy_scores) / len(strategy_scores)) if strategy_scores else None,
+            recent_performance_score=(sum(recent_performance_scores) / len(recent_performance_scores)) if recent_performance_scores else None,
             volatility_state=volatility_state,
             next_relevant_news_event=next_relevant_news_event,
             next_relevant_news_countdown=self._format_news_countdown(next_relevant_news_event),

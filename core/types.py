@@ -107,6 +107,9 @@ class FinalRecommendation:
     session_state: str = "unknown"
     mt5_connection_status: str = "unknown"
     signal_strength: str = "weak"
+    strategy_score: float | None = None
+    recent_performance_score: float | None = None
+    alert_quality_score: float | None = None
     rejection_reason: str | None = None
     volatility_state: str = "normal"
     next_relevant_news_event: dict[str, Any] | None = None

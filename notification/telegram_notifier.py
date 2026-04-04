@@ -77,34 +77,41 @@ class TelegramNotifier:
         action = recommendation.action.value if hasattr(recommendation.action, "value") else recommendation.action
         ts = recommendation.timestamp.replace(tzinfo=timezone.utc).isoformat(timespec="seconds")
         reasons = "\n".join(f"- {reason}" for reason in recommendation.reasons) if recommendation.reasons else "- n/a"
+        action_upper = str(action).upper()
+        action_style = "🟢 *BUY*" if action_upper == "BUY" else "🔴 *SELL*" if action_upper == "SELL" else f"⚪ *{action_upper}*"
         headline = {
-            "strong_trade_alert": "📌 *Trading Recommendation Alert*",
+            "strong_trade_alert": "📌 *High-Quality Trading Recommendation*",
             "trade_blocked_by_news": "📌 *Trade Blocked: News Risk*",
             "trade_blocked_by_market_closed": "📌 *Trade Blocked: Market Closed*",
             "trade_blocked_by_filters": "📌 *Trade Blocked: Quality Filters*",
             "rejected_signal_alert": "📌 *Rejected Setup Notice*",
         }.get(alert_type, "📌 *Monitoring Alert*")
+        quality_score = float(getattr(recommendation, "alert_quality_score", 0.0) or 0.0)
         return (
             f"{headline}\n\n"
-            "*Instrument*\n"
+            "*Signal*\n"
             f"- Symbol: `{recommendation.symbol}`\n"
             f"- Timeframe: `{recommendation.timeframe}`\n"
-            f"- Action: *{action}*\n\n"
-            "*Signal Quality*\n"
+            f"- Action: {action_style}\n"
             f"- Signal Strength: `{recommendation.signal_strength}`\n"
             f"- Confidence: `{recommendation.confidence:.2%}`\n"
-            f"- Risk/Reward: `{recommendation.risk_reward:.2f}`\n"
-            f"- Selected Strategy: `{recommendation.selected_strategy}`\n\n"
-            "*Price Levels*\n"
+            f"- Quality Score: `{quality_score:.2f}`\n\n"
+            "*Entry / SL / TP*\n"
             f"- Entry: `{recommendation.entry:.5f}`\n"
             f"- Stop Loss: `{recommendation.stop_loss:.5f}`\n"
             f"- Take Profit: `{recommendation.take_profit:.5f}`\n\n"
-            "*Execution Context*\n"
+            "*Risk/Reward*\n"
+            f"- Risk/Reward: `{recommendation.risk_reward:.2f}`\n"
+            "*Context*\n"
             f"- Market Status: `{recommendation.market_status}`\n"
             f"- News Status: `{recommendation.news_status}`\n"
             f"- Spread State: `{recommendation.spread_state}`\n"
             f"- Session State: `{recommendation.session_state}`\n"
             f"- Timestamp (UTC): `{ts}`\n\n"
+            "*Strategy*\n"
+            f"- Selected Strategy: `{recommendation.selected_strategy}`\n"
+            f"- Strategy Score: `{getattr(recommendation, 'strategy_score', 'n/a')}`\n"
+            f"- Recent Performance: `{getattr(recommendation, 'recent_performance_score', 'n/a')}`\n\n"
             "*Reasons*\n"
             f"{reasons}"
         )

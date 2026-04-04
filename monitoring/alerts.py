@@ -172,10 +172,36 @@ class AlertPolicy:
         min_confidence: float,
         min_risk_reward: float,
         min_signal_strength: str = "strong",
+        min_quality_score: float = 0.72,
+        strategy_weight: float = 0.2,
+        recent_performance_weight: float = 0.15,
     ) -> None:
         self.min_confidence = float(min_confidence)
         self.min_risk_reward = float(min_risk_reward)
         self.min_signal_strength = str(min_signal_strength).lower()
+        self.min_quality_score = float(min_quality_score)
+        self.strategy_weight = float(strategy_weight)
+        self.recent_performance_weight = float(recent_performance_weight)
+
+    @staticmethod
+    def _clamp01(value: float) -> float:
+        return max(0.0, min(1.0, float(value)))
+
+    def compute_quality_score(self, recommendation: FinalRecommendation) -> float:
+        confidence_component = self._clamp01(float(recommendation.confidence))
+        risk_reward_component = self._clamp01(float(recommendation.risk_reward) / max(1.0, self.min_risk_reward))
+        strategy_raw = getattr(recommendation, "strategy_score", None)
+        strategy_component = self._clamp01(float(strategy_raw) / 10.0) if strategy_raw is not None else 0.5
+        recent_raw = getattr(recommendation, "recent_performance_score", None)
+        recent_component = self._clamp01(float(recent_raw)) if recent_raw is not None else 0.5
+        base_weight = max(0.0, 1.0 - self.strategy_weight - self.recent_performance_weight)
+        quality_score = (
+            (base_weight * 0.5 * confidence_component)
+            + (base_weight * 0.5 * risk_reward_component)
+            + (self.strategy_weight * strategy_component)
+            + (self.recent_performance_weight * recent_component)
+        )
+        return self._clamp01(quality_score)
 
     def qualifies(self, recommendation: FinalRecommendation) -> tuple[bool, str]:
         action = recommendation.action.value if hasattr(recommendation.action, "value") else recommendation.action
@@ -183,6 +209,8 @@ class AlertPolicy:
             return False, "market_closed_or_unavailable"
         if recommendation.news_status == "blocked":
             return False, "news_blocked"
+        if str(getattr(recommendation, "spread_state", "unknown")).lower() == "excessive":
+            return False, "spread_excessive"
         if action not in {SignalAction.BUY, SignalAction.SELL, "BUY", "SELL"}:
             return False, "not_actionable"
         required_strength = SIGNAL_STRENGTH_RANK.get(self.min_signal_strength, SIGNAL_STRENGTH_RANK["strong"])
@@ -193,4 +221,8 @@ class AlertPolicy:
             return False, "confidence_below_threshold"
         if float(recommendation.risk_reward) < self.min_risk_reward:
             return False, "risk_reward_below_threshold"
+        quality_score = self.compute_quality_score(recommendation)
+        recommendation.alert_quality_score = quality_score
+        if quality_score < self.min_quality_score:
+            return False, "quality_score_below_threshold"
         return True, "qualified"

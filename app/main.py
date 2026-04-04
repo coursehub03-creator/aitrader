@@ -258,8 +258,11 @@ def run(engine: RecommendationEngine, args: argparse.Namespace, settings: Settin
     min_rr = float(_settings_get(settings, "recommendation.min_risk_reward", 1.5))
     policy = AlertPolicy(
         min_confidence=min_confidence,
-        min_risk_reward=min_rr,
+        min_risk_reward=float(_settings_get(settings, "monitoring.minimum_risk_reward_for_alert", min_rr)),
         min_signal_strength=str(_settings_get(settings, "monitoring.minimum_signal_strength_for_alert", "strong")),
+        min_quality_score=float(_settings_get(settings, "monitoring.minimum_quality_score_for_alert", 0.72)),
+        strategy_weight=float(_settings_get(settings, "monitoring.alert_quality_strategy_weight", 0.2)),
+        recent_performance_weight=float(_settings_get(settings, "monitoring.alert_quality_recent_performance_weight", 0.15)),
     )
 
     configured_cooldown = int(_settings_get(settings, "monitoring.alert_cooldown_seconds", 900))
@@ -323,8 +326,10 @@ def run(engine: RecommendationEngine, args: argparse.Namespace, settings: Settin
                     rejection_map = {
                         "market_closed_or_unavailable": "trade_blocked_by_market_closed",
                         "news_blocked": "trade_blocked_by_news",
+                        "spread_excessive": "trade_blocked_by_filters",
                         "confidence_below_threshold": "trade_blocked_by_filters",
                         "risk_reward_below_threshold": "trade_blocked_by_filters",
+                        "quality_score_below_threshold": "trade_blocked_by_filters",
                         "weak_or_medium_signal": "trade_blocked_by_filters",
                     }
                     mapped = rejection_map.get(qualifier_reason)
@@ -333,6 +338,18 @@ def run(engine: RecommendationEngine, args: argparse.Namespace, settings: Settin
                         sent, send_reason = notifier.send_recommendation_alert(recommendation, alert_type=mapped)
                         alert_status = "sent" if sent else "failed"
                         alert_reason = send_reason if sent else qualifier_reason
+                if alert_status == "suppressed":
+                    LOGGER.info(
+                        "Alert suppressed for %s: %s (confidence=%.2f rr=%.2f strength=%s quality=%.2f news=%s spread=%s)",
+                        symbol,
+                        alert_reason,
+                        float(recommendation.confidence),
+                        float(recommendation.risk_reward),
+                        getattr(recommendation, "signal_strength", "weak"),
+                        float(getattr(recommendation, "alert_quality_score", 0.0) or 0.0),
+                        recommendation.news_status,
+                        getattr(recommendation, "spread_state", "unknown"),
+                    )
 
                 if recommendation.market_status == "mt5_unavailable":
                     print("MT5 appears disconnected; will retry next cycle.")

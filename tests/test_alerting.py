@@ -138,6 +138,25 @@ def test_no_alert_for_weak_signal() -> None:
     assert reason == "weak_or_medium_signal"
 
 
+def test_no_alert_for_excessive_spread() -> None:
+    policy = AlertPolicy(min_confidence=0.6, min_risk_reward=1.5)
+    rec = _recommendation()
+    rec.spread_state = "excessive"
+    qualifies, reason = policy.qualifies(rec)
+    assert qualifies is False
+    assert reason == "spread_excessive"
+
+
+def test_no_alert_when_quality_score_below_threshold() -> None:
+    policy = AlertPolicy(min_confidence=0.6, min_risk_reward=1.5, min_quality_score=0.75)
+    rec = _recommendation(confidence=0.7, risk_reward=1.5)
+    rec.strategy_score = 1.0
+    rec.recent_performance_score = 0.2
+    qualifies, reason = policy.qualifies(rec)
+    assert qualifies is False
+    assert reason == "quality_score_below_threshold"
+
+
 def test_safe_failure_when_telegram_not_configured() -> None:
     notifier = TelegramNotifier(TelegramConfig(enabled=True, bot_token="", chat_id=""))
     sent, reason = notifier.send_recommendation_alert(_recommendation())

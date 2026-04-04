@@ -229,8 +229,16 @@ class DashboardService:
                     self.settings.get("recommendation.min_confidence", 0.6),
                 )
             ),
-            min_risk_reward=float(self.settings.get("recommendation.min_risk_reward", 1.5)),
+            min_risk_reward=float(
+                self.settings.get(
+                    "monitoring.minimum_risk_reward_for_alert",
+                    self.settings.get("recommendation.min_risk_reward", 1.5),
+                )
+            ),
             min_signal_strength=str(self.settings.get("monitoring.minimum_signal_strength_for_alert", "strong")),
+            min_quality_score=float(self.settings.get("monitoring.minimum_quality_score_for_alert", 0.72)),
+            strategy_weight=float(self.settings.get("monitoring.alert_quality_strategy_weight", 0.2)),
+            recent_performance_weight=float(self.settings.get("monitoring.alert_quality_recent_performance_weight", 0.15)),
         )
         qualifies, qualify_reason = policy.qualifies(recommendation)
         alert_type = "strong_trade_alert"
@@ -240,8 +248,10 @@ class DashboardService:
             rejection_map = {
                 "market_closed_or_unavailable": "trade_blocked_by_market_closed",
                 "news_blocked": "trade_blocked_by_news",
+                "spread_excessive": "trade_blocked_by_filters",
                 "confidence_below_threshold": "trade_blocked_by_filters",
                 "risk_reward_below_threshold": "trade_blocked_by_filters",
+                "quality_score_below_threshold": "trade_blocked_by_filters",
                 "weak_or_medium_signal": "trade_blocked_by_filters",
             }
             alert_type = rejection_map.get(qualify_reason, "rejected_signal_alert")
@@ -277,6 +287,21 @@ class DashboardService:
             history.mark_sent(recommendation, now)
             return "sent", send_reason, True, alert_type
         return "failed", send_reason, False, alert_type
+
+    def latest_alert_summary(self) -> dict[str, str]:
+        history = self.recent_alert_events(limit=200)
+        if history.empty:
+            return {"last_sent": "Never", "last_suppressed": "Never", "suppression_reason": "n/a"}
+        sent_rows = history[history["status"] == "sent"]
+        suppressed_rows = history[history["status"] == "suppressed"]
+        last_sent = sent_rows.iloc[0]["timestamp"] if not sent_rows.empty else "Never"
+        if not suppressed_rows.empty:
+            last_suppressed = suppressed_rows.iloc[0]["timestamp"]
+            suppression_reason = str(suppressed_rows.iloc[0]["reason"] or "n/a")
+        else:
+            last_suppressed = "Never"
+            suppression_reason = "n/a"
+        return {"last_sent": str(last_sent), "last_suppressed": str(last_suppressed), "suppression_reason": suppression_reason}
 
     def send_test_telegram_message(self) -> dict[str, Any]:
         """Send a Telegram test message with explicit UI-safe status metadata."""
@@ -370,6 +395,9 @@ class DashboardService:
             "confidence": recommendation.confidence,
             "risk_reward": recommendation.risk_reward,
             "signal_strength": recommendation.signal_strength,
+            "strategy_score": recommendation.strategy_score if recommendation.strategy_score is not None else "",
+            "recent_performance_score": recommendation.recent_performance_score if recommendation.recent_performance_score is not None else "",
+            "alert_quality_score": recommendation.alert_quality_score if recommendation.alert_quality_score is not None else "",
             "rejection_reason": recommendation.rejection_reason or "",
             "volatility_state": recommendation.volatility_state,
             "next_relevant_news_event": json.dumps(recommendation.next_relevant_news_event or {}),
