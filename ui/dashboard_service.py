@@ -798,6 +798,7 @@ class DashboardService:
             "train_max_drawdown",
             "train_profit_factor",
             "train_expectancy",
+            "train_avg_reward_risk",
             "train_score",
             "total_trades",
             "win_rate",
@@ -806,13 +807,17 @@ class DashboardService:
             "max_drawdown",
             "profit_factor",
             "expectancy",
+            "avg_reward_risk",
             "score",
+            "final_validation_score",
             "params",
             "best_in_symbol_timeframe",
             "explainability",
         ]
         trimmed = result[save_cols].copy()
         self.persistence.save_historical_validation_results(trimmed)
+        self.learning_dir.mkdir(parents=True, exist_ok=True)
+        trimmed.to_csv(self.learning_dir / "historical_validation.csv", index=False)
         for _, row in trimmed[trimmed["best_in_symbol_timeframe"]].iterrows():
             try:
                 params = json.loads(str(row["params"]))

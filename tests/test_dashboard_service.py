@@ -6,6 +6,7 @@ from types import SimpleNamespace
 
 import pandas as pd
 from core.types import FinalRecommendation, SignalAction
+from core.types import StrategySignal
 from ui import dashboard_service as dashboard_module
 from ui.dashboard_service import DashboardService
 
@@ -405,3 +406,69 @@ def test_send_test_telegram_message_success(tmp_path, monkeypatch) -> None:
     assert result["status"] == "success"
     assert result["message"] == "Test message sent successfully"
     assert result["reason"] == "sent"
+
+
+def test_run_historical_validation_persists_ranked_rows_with_final_score(tmp_path, monkeypatch) -> None:
+    class _DummyStrategy:
+        def __init__(self, name: str) -> None:
+            self.name = name
+
+        def generate_signal(self, df, params):
+            _ = (df, params)
+            return StrategySignal(
+                strategy_name=self.name,
+                action=SignalAction.BUY,
+                entry=1.1000,
+                stop_loss=1.0990,
+                take_profit=1.1020,
+                confidence=0.8,
+                reasons=["test"],
+            )
+
+    service = DashboardService.__new__(DashboardService)
+    service.settings = type(
+        "S",
+        (),
+        {"get": lambda self, key, default=None: default},
+    )()
+    service.learning_dir = tmp_path / "logs_learning"
+    service.historical_data_summary = lambda: pd.DataFrame([{"symbol": "EURUSD", "timeframe": "M5"}])
+    service.history_pipeline = type(
+        "HP",
+        (),
+        {
+            "load_history": staticmethod(
+                lambda symbol, timeframe: pd.DataFrame(
+                    {
+                        "open": [1.1 + (i * 0.0001) for i in range(260)],
+                        "high": [1.1003 + (i * 0.0001) for i in range(260)],
+                        "low": [1.0997 + (i * 0.0001) for i in range(260)],
+                        "close": [1.1 + (i * 0.0001) for i in range(260)],
+                        "volume": [100] * 260,
+                    }
+                )
+            )
+        },
+    )()
+    service.engine = type("E", (), {"optimizer": object()})()
+    service.persistence = type(
+        "P",
+        (),
+        {
+            "load_best_params": staticmethod(lambda *_args, **_kwargs: {}),
+            "save_historical_validation_results": lambda self, frame: frame,
+            "save_best_params": lambda self, symbol, timeframe, strategy_name, params, score: (symbol, timeframe, strategy_name, params, score),
+        },
+    )()
+    service._persist_learning_metadata = lambda **_kwargs: None
+    service._append_learning_event = lambda *_args, **_kwargs: None
+
+    monkeypatch.setattr(dashboard_module, "create_default_strategies", lambda: [_DummyStrategy("s1"), _DummyStrategy("s2")])
+    out = service.run_historical_validation()
+
+    assert not out.empty
+    assert "final_validation_score" in out.columns
+    assert "avg_reward_risk" in out.columns
+    assert len(out) == 2
+    assert set(out["rank"].astype(int).tolist()) == {1}
+    assert (service.learning_dir / "historical_validation.csv").exists()

@@ -37,7 +37,14 @@ def test_historical_validation_pipeline_metrics_and_rank() -> None:
     assert out
     assert out["total_trades"] >= 0
     assert "score" in out
+    assert "final_validation_score" in out
+    assert "avg_reward_risk" in out
     assert "explainability" in out
 
-    ranked = format_historical_results([out])
+    alt = dict(out)
+    alt["strategy"] = "trend_rsi_alt"
+    alt["score"] = float(out["score"]) - 1.0
+    alt["final_validation_score"] = alt["score"]
+    ranked = format_historical_results([out, alt])
     assert ranked.iloc[0]["rank"] == 1
+    assert ranked.iloc[1]["rank"] == 2

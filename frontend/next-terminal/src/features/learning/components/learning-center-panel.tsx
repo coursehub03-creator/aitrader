@@ -27,7 +27,9 @@ type ValidationRow = {
   max_drawdown?: number;
   profit_factor?: number;
   expectancy?: number;
+  avg_reward_risk?: number;
   score?: number;
+  final_validation_score?: number;
   params?: string;
   best_in_symbol_timeframe?: boolean;
 };
@@ -46,6 +48,17 @@ export function LearningCenterPanel() {
     if (!status) return "idle";
     return status.success ? "ok" : "error";
   }, [status]);
+
+  const rankedStrategies = useMemo(() => {
+    return [...validationRows].sort(
+      (a, b) => Number(b.final_validation_score ?? b.score ?? 0) - Number(a.final_validation_score ?? a.score ?? 0),
+    );
+  }, [validationRows]);
+
+  const topParameterSets = useMemo(() => {
+    const winners = validationRows.filter((row) => row.best_in_symbol_timeframe);
+    return winners.length > 0 ? winners : rankedStrategies.slice(0, 10);
+  }, [rankedStrategies, validationRows]);
 
   async function onFetchHistoricalData() {
     setBusy(true);
@@ -193,13 +206,14 @@ export function LearningCenterPanel() {
               <th>Max DD</th>
               <th>PF</th>
               <th>Expectancy</th>
+              <th>Avg R/R</th>
               <th>Score</th>
             </tr>
           </thead>
           <tbody>
             {validationRows.length === 0 ? (
               <tr>
-                <td colSpan={12}>No validation results yet. Run historical validation.</td>
+                <td colSpan={13}>No validation results yet. Run historical validation.</td>
               </tr>
             ) : (
               validationRows.map((item, index) => (
@@ -215,7 +229,78 @@ export function LearningCenterPanel() {
                   <td>{typeof item.max_drawdown === "number" ? item.max_drawdown.toFixed(2) : "-"}</td>
                   <td>{typeof item.profit_factor === "number" ? item.profit_factor.toFixed(3) : "-"}</td>
                   <td>{typeof item.expectancy === "number" ? item.expectancy.toFixed(3) : "-"}</td>
-                  <td>{typeof item.score === "number" ? item.score.toFixed(2) : "-"}</td>
+                  <td>{typeof item.avg_reward_risk === "number" ? item.avg_reward_risk.toFixed(3) : "-"}</td>
+                  <td>
+                    {typeof item.final_validation_score === "number"
+                      ? item.final_validation_score.toFixed(2)
+                      : typeof item.score === "number"
+                        ? item.score.toFixed(2)
+                        : "-"}
+                  </td>
+                </tr>
+              ))
+            )}
+          </tbody>
+        </table>
+      </div>
+
+      <div>
+        <h3>Ranked Strategies</h3>
+        <table className="inventory-table">
+          <thead>
+            <tr>
+              <th>Symbol</th>
+              <th>TF</th>
+              <th>Strategy</th>
+              <th>Rank</th>
+              <th>Final Score</th>
+            </tr>
+          </thead>
+          <tbody>
+            {rankedStrategies.length === 0 ? (
+              <tr>
+                <td colSpan={5}>No ranked strategies yet.</td>
+              </tr>
+            ) : (
+              rankedStrategies.map((item, index) => (
+                <tr key={`ranked-${item.symbol}-${item.timeframe}-${item.strategy}-${index}`}>
+                  <td>{item.symbol ?? "-"}</td>
+                  <td>{item.timeframe ?? "-"}</td>
+                  <td>{item.strategy ?? "-"}</td>
+                  <td>{item.rank ?? "-"}</td>
+                  <td>{typeof item.final_validation_score === "number" ? item.final_validation_score.toFixed(2) : "-"}</td>
+                </tr>
+              ))
+            )}
+          </tbody>
+        </table>
+      </div>
+
+      <div>
+        <h3>Top Parameter Sets</h3>
+        <table className="inventory-table">
+          <thead>
+            <tr>
+              <th>Symbol</th>
+              <th>TF</th>
+              <th>Strategy</th>
+              <th>Params</th>
+              <th>Final Score</th>
+            </tr>
+          </thead>
+          <tbody>
+            {topParameterSets.length === 0 ? (
+              <tr>
+                <td colSpan={5}>No parameter sets yet.</td>
+              </tr>
+            ) : (
+              topParameterSets.map((item, index) => (
+                <tr key={`params-${item.symbol}-${item.timeframe}-${item.strategy}-${index}`}>
+                  <td>{item.symbol ?? "-"}</td>
+                  <td>{item.timeframe ?? "-"}</td>
+                  <td>{item.strategy ?? "-"}</td>
+                  <td>{item.params ?? "-"}</td>
+                  <td>{typeof item.final_validation_score === "number" ? item.final_validation_score.toFixed(2) : "-"}</td>
                 </tr>
               ))
             )}
