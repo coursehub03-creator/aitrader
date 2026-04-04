@@ -1,7 +1,20 @@
 import { apiGet, apiPost } from "@/features/shared/api-client";
 
+export type LearningCenterPayload = {
+  active: Array<Record<string, unknown>>;
+  candidates: Array<Record<string, unknown>>;
+  state_changes: Array<Record<string, unknown>>;
+  historical_validation: Array<Record<string, unknown>>;
+  paper_trades: Array<Record<string, unknown>>;
+  events: Array<Record<string, unknown>>;
+  best_config: Array<Record<string, unknown>>;
+  state_changes_prepared: Array<Record<string, unknown>>;
+  metadata: Record<string, unknown>;
+  health: Record<string, unknown>;
+};
+
 export function fetchLearningCenter() {
-  return apiGet<Record<string, unknown>>("/learning/center");
+  return apiGet<LearningCenterPayload>("/learning/center");
 }
 
 export type HistoricalFetchPayload = {
@@ -36,7 +49,6 @@ export function fetchHistoricalData(symbol: string, timeframe: string, lookbackD
 export function fetchHistoryInventory() {
   return apiGet<HistoryInventoryPayload>("/learning/history/inventory");
 }
-
 
 export type HistoricalValidationPayload = {
   rows: Array<Record<string, unknown>>;
