@@ -31,6 +31,7 @@ st.set_page_config(page_title="AITrader Trading Terminal", page_icon="📈", lay
 
 COMMON_SYMBOLS = ["EURUSD", "GBPUSD", "USDJPY", "XAUUSD", "AUDUSD", "USDCAD"]
 TIMEFRAMES = ["M1", "M5", "M15", "M30", "H1", "H4", "D1"]
+LOOKBACK_OPTIONS = [30, 90, 180, 365]
 
 THEME_CSS = """
 <style>
@@ -94,6 +95,10 @@ def ensure_state() -> None:
         "last_telegram_test_result": "n/a",
         "last_telegram_test_reason": "",
         "monitor_runtime": MonitorState(),
+        "history_fetch_symbol": "EURUSD",
+        "history_fetch_timeframe": "M5",
+        "history_fetch_lookback_days": 90,
+        "history_fetch_result": {},
     }
     for k, v in defaults.items():
         if k not in st.session_state:
@@ -384,6 +389,37 @@ def render_market_visuals(service: DashboardService, state, recommendation: Fina
 
 
 def render_self_learning_center(service: DashboardService) -> None:
+    st.markdown("### Historical Data Ingestion")
+    c1, c2, c3, c4 = st.columns([1.0, 1.0, 1.0, 1.2], gap="small")
+    st.session_state.history_fetch_symbol = c1.selectbox("History Symbol", COMMON_SYMBOLS, index=COMMON_SYMBOLS.index(st.session_state.history_fetch_symbol) if st.session_state.history_fetch_symbol in COMMON_SYMBOLS else 0)
+    st.session_state.history_fetch_timeframe = c2.selectbox("History Timeframe", TIMEFRAMES, index=TIMEFRAMES.index(st.session_state.history_fetch_timeframe) if st.session_state.history_fetch_timeframe in TIMEFRAMES else 1)
+    st.session_state.history_fetch_lookback_days = c3.selectbox("Lookback Range", LOOKBACK_OPTIONS, index=LOOKBACK_OPTIONS.index(int(st.session_state.history_fetch_lookback_days)) if int(st.session_state.history_fetch_lookback_days) in LOOKBACK_OPTIONS else 1)
+    fetch_clicked = c4.button("Fetch Historical Data", type="primary", use_container_width=True)
+    if fetch_clicked:
+        with st.spinner("Fetching historical candles from MT5..."):
+            st.session_state.history_fetch_result = service.fetch_historical_data(
+                st.session_state.history_fetch_symbol,
+                st.session_state.history_fetch_timeframe,
+                int(st.session_state.history_fetch_lookback_days),
+            )
+
+    fetch_result = st.session_state.history_fetch_result or {}
+    if fetch_result:
+        message = str(fetch_result.get("status_message", ""))
+        if bool(fetch_result.get("success", False)):
+            st.success(message)
+        else:
+            st.warning(message)
+
+    st.markdown("### History Inventory")
+    inventory = service.historical_data_summary()
+    st.dataframe(
+        inventory if not inventory.empty else pd.DataFrame([{"info": "No historical datasets stored yet"}]),
+        use_container_width=True,
+        hide_index=True,
+        height=220,
+    )
+
     payload = service.learning_center_payload()
     render_learning_health(payload)
     with st.expander("Optimizer Leaderboard by Symbol", expanded=False):

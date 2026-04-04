@@ -63,6 +63,6 @@ def historical_validation_results(
 ) -> HistoricalValidationEnvelope:
     payload = service.learning_center_payload()
     frame = payload.get("historical_validation")
-    if isinstance(frame, dict):
+    if frame is None or isinstance(frame, dict):
         return HistoricalValidationEnvelope(rows=[])
     return HistoricalValidationEnvelope(rows=frame.to_dict(orient="records"))

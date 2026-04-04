@@ -55,6 +55,7 @@ class HistoricalFetchRequest(BaseModel):
 
 class HistoricalFetchResponse(BaseModel):
     success: bool
+    status: str = "ok"
     symbol: str
     timeframe: str
     lookback_days: int
@@ -62,6 +63,7 @@ class HistoricalFetchResponse(BaseModel):
     date_start: str = ""
     date_end: str = ""
     storage_path: str = ""
+    last_fetch_time: str = ""
     status_message: str
 
 

@@ -143,3 +143,35 @@ def test_market_history_writes_csv_and_parquet_fallback(tmp_path: Path) -> None:
     )
     assert maybe_parquet_path.exists()
     assert maybe_parquet_path.suffix in {".parquet", ".csv"}
+
+
+def test_market_history_inventory_upsert(tmp_path: Path) -> None:
+    persistence = LearningPersistence(StorageLayout(root=tmp_path))
+    persistence.upsert_market_history_inventory(
+        {
+            "symbol": "EURUSD",
+            "timeframe": "M5",
+            "candles": 100,
+            "data_start": "2026-01-01T00:00:00+00:00",
+            "data_end": "2026-01-10T00:00:00+00:00",
+            "last_fetch_time": "2026-01-10T00:01:00+00:00",
+            "storage_path": "data/market_history/EURUSD_M5.csv",
+            "fetch_status": "ok",
+        }
+    )
+    persistence.upsert_market_history_inventory(
+        {
+            "symbol": "EURUSD",
+            "timeframe": "M5",
+            "candles": 120,
+            "data_start": "2026-01-01T00:00:00+00:00",
+            "data_end": "2026-01-12T00:00:00+00:00",
+            "last_fetch_time": "2026-01-12T00:01:00+00:00",
+            "storage_path": "data/market_history/EURUSD_M5.csv",
+            "fetch_status": "partial",
+        }
+    )
+    inventory = persistence.load_market_history_inventory()
+    assert len(inventory) == 1
+    assert int(inventory.loc[0, "candles"]) == 120
+    assert inventory.loc[0, "fetch_status"] == "partial"

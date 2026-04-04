@@ -174,34 +174,16 @@ class DashboardService:
         pipeline = HistoricalDataPipeline(mt5, persistence=self.persistence)
         try:
             mt5.connect()
-            frame, path = pipeline.fetch_and_store_days(symbol=symbol, timeframe=timeframe, lookback_days=int(lookback_days))
-            if frame.empty:
-                return {
-                    "success": False,
-                    "symbol": symbol.upper(),
-                    "timeframe": timeframe.upper(),
-                    "lookback_days": int(lookback_days),
-                    "candles_fetched": 0,
-                    "date_start": "",
-                    "date_end": "",
-                    "storage_path": "",
-                    "status_message": mt5.status_message or "No historical data available.",
-                }
-            times = pd.to_datetime(frame["time"], errors="coerce").dropna()
-            return {
-                "success": True,
-                "symbol": symbol.upper(),
-                "timeframe": timeframe.upper(),
-                "lookback_days": int(lookback_days),
-                "candles_fetched": int(len(frame)),
-                "date_start": times.min().isoformat() if not times.empty else "",
-                "date_end": times.max().isoformat() if not times.empty else "",
-                "storage_path": str(path),
-                "status_message": f"Fetched {len(frame)} candles successfully.",
-            }
+            result = pipeline.fetch_and_store_with_result(symbol=symbol, timeframe=timeframe, lookback_days=int(lookback_days))
+            if hasattr(result, "__dataclass_fields__"):
+                return asdict(result)
+            if hasattr(result, "__dict__"):
+                return dict(result.__dict__)
+            return dict(result)
         except ValueError as exc:
             return {
                 "success": False,
+                "status": "invalid_request",
                 "symbol": symbol.upper(),
                 "timeframe": timeframe.upper(),
                 "lookback_days": int(lookback_days),
@@ -209,6 +191,7 @@ class DashboardService:
                 "date_start": "",
                 "date_end": "",
                 "storage_path": "",
+                "last_fetch_time": "",
                 "status_message": str(exc),
             }
         finally:
