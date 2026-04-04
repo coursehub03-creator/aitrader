@@ -24,6 +24,7 @@ class ValidationMetrics:
     max_drawdown: float
     profit_factor: float
     expectancy: float
+    avg_reward_risk: float
     score: float
 
 
@@ -82,6 +83,7 @@ class HistoricalValidationPipeline:
             "train_max_drawdown": train_metrics.max_drawdown,
             "train_profit_factor": train_metrics.profit_factor,
             "train_expectancy": train_metrics.expectancy,
+            "train_avg_reward_risk": train_metrics.avg_reward_risk,
             "train_score": train_metrics.score,
             "total_trades": validation_metrics.total_trades,
             "win_rate": validation_metrics.win_rate,
@@ -90,10 +92,12 @@ class HistoricalValidationPipeline:
             "max_drawdown": validation_metrics.max_drawdown,
             "profit_factor": validation_metrics.profit_factor,
             "expectancy": validation_metrics.expectancy,
+            "avg_reward_risk": validation_metrics.avg_reward_risk,
             "score": validation_metrics.score,
+            "final_validation_score": validation_metrics.score,
             "explainability": (
-                "Rolling validation score = 0.30*net_pnl + 0.25*expectancy + "
-                "0.20*(win_rate*100) + 0.15*profit_factor*10 + 0.10*risk_penalty"
+                "Rolling validation score = 0.25*net_pnl + 0.25*expectancy + "
+                "0.20*(win_rate*100) + 0.10*profit_factor*10 + 0.10*avg_reward_risk*10 + 0.10*risk_penalty"
             ),
         }
 
@@ -151,7 +155,7 @@ class HistoricalValidationPipeline:
     @staticmethod
     def _metrics(trades: list[PaperTradeResult]) -> ValidationMetrics:
         if not trades:
-            return ValidationMetrics(0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0)
+            return ValidationMetrics(0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0)
 
         pnl = np.array([t.pnl for t in trades], dtype=float)
         equity = pnl.cumsum()
@@ -168,12 +172,21 @@ class HistoricalValidationPipeline:
         losses = abs(float(pnl[pnl < 0].sum()))
         profit_factor = float(wins / losses) if losses > 0 else (float("inf") if wins > 0 else 0.0)
 
+        reward_risk_values: list[float] = []
+        for trade in trades:
+            risk = abs(float(trade.entry) - float(trade.stop_loss))
+            reward = abs(float(trade.take_profit) - float(trade.entry))
+            if risk > 0:
+                reward_risk_values.append(reward / risk)
+        avg_reward_risk = float(np.mean(reward_risk_values)) if reward_risk_values else 0.0
+
         risk_penalty = max(0.0, 100.0 - (max_drawdown * 10.0))
         score = (
-            (net_pnl * 0.30)
+            (net_pnl * 0.25)
             + (expectancy * 0.25)
             + ((win_rate * 100.0) * 0.20)
-            + (min(profit_factor, 5.0) * 10.0 * 0.15)
+            + (min(profit_factor, 5.0) * 10.0 * 0.10)
+            + (min(avg_reward_risk, 5.0) * 10.0 * 0.10)
             + (risk_penalty * 0.10)
         )
 
@@ -185,6 +198,7 @@ class HistoricalValidationPipeline:
             max_drawdown=max_drawdown,
             profit_factor=profit_factor,
             expectancy=expectancy,
+            avg_reward_risk=avg_reward_risk,
             score=float(score),
         )
 
