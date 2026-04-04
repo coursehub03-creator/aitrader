@@ -422,8 +422,53 @@ def render_self_learning_center(service: DashboardService) -> None:
 
     payload = service.learning_center_payload()
     render_learning_health(payload)
+    optimizer_board = service.optimizer_leaderboard_by_symbol()
+    latest_optimizer = st.session_state.optimizer_output if "optimizer_output" in st.session_state else pd.DataFrame()
+    meta = payload.get("metadata", {}) if isinstance(payload.get("metadata"), dict) else {}
+    last_run = str(meta.get("last_optimization_run", "n/a"))
+    latest_score = 0.0
+    if isinstance(latest_optimizer, pd.DataFrame) and not latest_optimizer.empty and "score" in latest_optimizer.columns:
+        latest_score = float(pd.to_numeric(latest_optimizer["score"], errors="coerce").fillna(0.0).max())
+    elif not optimizer_board.empty and "best_score" in optimizer_board.columns:
+        latest_score = float(pd.to_numeric(optimizer_board["best_score"], errors="coerce").fillna(0.0).max())
+
+    panels = st.columns(2, gap="small")
+    with panels[0]:
+        st.markdown("### Best Params per Symbol")
+        by_symbol = pd.DataFrame()
+        if not optimizer_board.empty:
+            by_symbol = (
+                optimizer_board.sort_values(["symbol", "best_score"], ascending=[True, False])
+                .drop_duplicates(subset=["symbol", "strategy_name"], keep="first")
+                .reset_index(drop=True)
+            )
+        st.dataframe(
+            by_symbol if not by_symbol.empty else pd.DataFrame([{"info": "No symbol-specific optimizer params yet"}]),
+            use_container_width=True,
+            hide_index=True,
+            height=220,
+        )
+    with panels[1]:
+        st.markdown("### Best Params per Timeframe")
+        by_timeframe = pd.DataFrame()
+        if not optimizer_board.empty and "timeframe" in optimizer_board.columns:
+            by_timeframe = (
+                optimizer_board.sort_values(["timeframe", "best_score"], ascending=[True, False])
+                .drop_duplicates(subset=["timeframe", "strategy_name"], keep="first")
+                .reset_index(drop=True)
+            )
+        st.dataframe(
+            by_timeframe if not by_timeframe.empty else pd.DataFrame([{"info": "No timeframe-specific optimizer params yet"}]),
+            use_container_width=True,
+            hide_index=True,
+            height=220,
+        )
+
+    run_stats = st.columns(2, gap="small")
+    run_stats[0].metric("Last Optimization Run", last_run)
+    run_stats[1].metric("Latest Optimization Score", f"{latest_score:.2f}")
+
     with st.expander("Optimizer Leaderboard by Symbol", expanded=False):
-        optimizer_board = service.optimizer_leaderboard_by_symbol()
         st.dataframe(
             optimizer_board if not optimizer_board.empty else pd.DataFrame([{"info": "No optimizer leaderboard data yet"}]),
             use_container_width=True,

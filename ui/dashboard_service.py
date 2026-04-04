@@ -567,7 +567,7 @@ class DashboardService:
                 profile_ranges = dict(profile.optimizer_ranges.get(strategy.name, {})) if profile.optimizer_ranges else {}
                 grid = {**dict(grid_root.get(strategy.name, {})), **dict(symbol_grid_root.get(strategy.name, {})), **profile_ranges}
                 fixed = {k: v for k, v in defaults.items() if k not in grid}
-                result = self.engine.optimizer.optimize(strategy, candles, grid, symbol.upper(), fixed)
+                result = self.engine.optimizer.optimize(strategy, candles, grid, symbol.upper(), timeframe.upper(), fixed)
                 if result is None:
                     continue
                 rows.append(
@@ -762,6 +762,7 @@ class DashboardService:
                         strategy=strategy,
                         candles=candles,
                         symbol=symbol,
+                        timeframe=timeframe,
                         fixed_params=fixed,
                         parameter_grid=parameter_grid,
                     )
@@ -843,7 +844,7 @@ class DashboardService:
             symbol_grid = dict(symbol_grid_root.get(strategy.name, {}))
             base_grid.update(symbol_grid)
             fixed = {k: v for k, v in defaults.items() if k not in base_grid}
-            result = self.engine.optimizer.optimize(strategy, candles, base_grid, symbol.upper(), fixed)
+            result = self.engine.optimizer.optimize(strategy, candles, base_grid, symbol.upper(), timeframe.upper(), fixed)
             if result is None:
                 continue
             rows.append(

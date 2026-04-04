@@ -186,7 +186,7 @@ class RecommendationEngine:
                     next_relevant_news_event=next_event,
                 )
 
-            strategy_outputs = self._run_strategies(symbol, candles)
+            strategy_outputs = self._run_strategies(symbol, timeframe, candles)
             if not strategy_outputs:
                 return self._no_trade(
                     symbol,
@@ -229,14 +229,14 @@ class RecommendationEngine:
         finally:
             self.mt5.shutdown()
 
-    def _run_strategies(self, symbol: str, candles: pd.DataFrame) -> list[tuple[StrategySignal, StrategyScore | None]]:
+    def _run_strategies(self, symbol: str, timeframe: str, candles: pd.DataFrame) -> list[tuple[StrategySignal, StrategyScore | None]]:
         outputs: list[tuple[StrategySignal, StrategyScore | None]] = []
         grid_root = self.settings.get("learning.parameter_grid", {})
         symbol_grid_root = self.settings.get(f"learning.symbol_parameter_grid.{symbol.upper()}", {})
         optimization_enabled = bool(self.settings.get("learning.optimization_enabled", True))
         active_count = max(2, min(3, int(self.settings.get("learning.active_strategy_count", 2))))
 
-        optimization_results = self._optimize_strategies(symbol, candles, grid_root, symbol_grid_root, optimization_enabled)
+        optimization_results = self._optimize_strategies(symbol, timeframe, candles, grid_root, symbol_grid_root, optimization_enabled)
         active_names = self._active_strategy_names(optimization_results, active_count, optimization_enabled)
 
         for strategy in self.strategies:
@@ -265,6 +265,7 @@ class RecommendationEngine:
     def _optimize_strategies(
         self,
         symbol: str,
+        timeframe: str,
         candles: pd.DataFrame,
         grid_root: dict[str, dict[str, list[Any]]],
         symbol_grid_root: dict[str, dict[str, list[Any]]],
@@ -283,7 +284,7 @@ class RecommendationEngine:
                 **profile_ranges,
             }
             fixed = {k: v for k, v in defaults.items() if k not in grid}
-            opt = self.optimizer.optimize(strategy, candles, grid, symbol, fixed)
+            opt = self.optimizer.optimize(strategy, candles, grid, symbol, timeframe, fixed)
             if opt is not None:
                 results[strategy.name] = opt
         return results

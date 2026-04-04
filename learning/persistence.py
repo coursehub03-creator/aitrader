@@ -230,7 +230,9 @@ class LearningPersistence:
         payload = frame.copy()
         payload["saved_at"] = self._timestamp_utc()
         self.upsert_table("optimizer_results", payload, if_exists="append")
-        path = self.layout.optimizer_dir / f"optimizer_{symbol.upper()}_{timeframe.upper()}_{datetime.now(tz=timezone.utc).strftime('%Y%m%dT%H%M%SZ')}.csv"
+        target_dir = self.layout.optimizer_dir / symbol.upper() / timeframe.upper()
+        target_dir.mkdir(parents=True, exist_ok=True)
+        path = target_dir / f"optimizer_{datetime.now(tz=timezone.utc).strftime('%Y%m%dT%H%M%SZ')}.csv"
         self.safe_write_csv(path, payload)
         return path
 

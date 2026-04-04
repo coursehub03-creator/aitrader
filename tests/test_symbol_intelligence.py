@@ -78,13 +78,13 @@ def test_optimizer_registry_keeps_symbol_separation(tmp_path) -> None:
 
     optimizer = ParameterOptimizer(lookahead_bars=5, min_history_bars=100, step=20, report_dir=tmp_path)
     strategy = TrendRSIStrategy()
-    optimizer.optimize(strategy, candles, {'ema_fast': [8], 'ema_slow': [30], 'rsi_buy_threshold': [50], 'rsi_sell_threshold': [45]}, symbol='EURUSD', fixed_params={'rsi_period': 14})
-    optimizer.optimize(strategy, candles, {'ema_fast': [12], 'ema_slow': [40], 'rsi_buy_threshold': [55], 'rsi_sell_threshold': [45]}, symbol='XAUUSD', fixed_params={'rsi_period': 14})
+    optimizer.optimize(strategy, candles, {'ema_fast': [8], 'ema_slow': [30], 'rsi_buy_threshold': [50], 'rsi_sell_threshold': [45]}, symbol='EURUSD', timeframe='M5', fixed_params={'rsi_period': 14})
+    optimizer.optimize(strategy, candles, {'ema_fast': [12], 'ema_slow': [40], 'rsi_buy_threshold': [55], 'rsi_sell_threshold': [45]}, symbol='XAUUSD', timeframe='M5', fixed_params={'rsi_period': 14})
 
-    payload = json.loads((tmp_path / 'best_params_by_symbol.json').read_text(encoding='utf-8'))
+    payload = json.loads((tmp_path / 'best_params_by_symbol_timeframe.json').read_text(encoding='utf-8'))
     assert 'EURUSD' in payload
     assert 'XAUUSD' in payload
-    assert payload['EURUSD']['trend_rsi']['best_params'] != payload['XAUUSD']['trend_rsi']['best_params']
+    assert payload['EURUSD']['M5']['trend_rsi']['best_params'] != payload['XAUUSD']['M5']['trend_rsi']['best_params']
 
 
 def test_symbol_specific_news_mapping() -> None:
@@ -134,8 +134,9 @@ def test_optimizer_writes_symbol_leaderboard_file(tmp_path) -> None:
 
     optimizer = ParameterOptimizer(lookahead_bars=5, min_history_bars=100, step=20, report_dir=tmp_path)
     strategy = TrendRSIStrategy()
-    optimizer.optimize(strategy, candles, {'ema_fast': [8], 'ema_slow': [30], 'rsi_buy_threshold': [50], 'rsi_sell_threshold': [45]}, symbol='EURUSD', fixed_params={'rsi_period': 14})
+    optimizer.optimize(strategy, candles, {'ema_fast': [8], 'ema_slow': [30], 'rsi_buy_threshold': [50], 'rsi_sell_threshold': [45]}, symbol='EURUSD', timeframe='M5', fixed_params={'rsi_period': 14})
 
     leaderboard = json.loads((tmp_path / 'symbol_optimizer_leaderboard.json').read_text(encoding='utf-8'))
     assert leaderboard[0]['symbol'] == 'EURUSD'
+    assert leaderboard[0]['timeframe'] == 'M5'
     assert leaderboard[0]['strategy_name'] == 'trend_rsi'

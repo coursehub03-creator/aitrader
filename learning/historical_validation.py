@@ -108,12 +108,13 @@ class HistoricalValidationPipeline:
         strategy: TradingStrategy,
         candles: pd.DataFrame,
         symbol: str,
+        timeframe: str,
         fixed_params: dict[str, Any],
         parameter_grid: dict[str, list[Any]],
     ) -> dict[str, Any]:
         if not parameter_grid:
             return fixed_params
-        result = optimizer.optimize(strategy, candles, parameter_grid, symbol, fixed_params=fixed_params)
+        result = optimizer.optimize(strategy, candles, parameter_grid, symbol, timeframe, fixed_params=fixed_params)
         if result is None:
             return fixed_params
         return result.best_params

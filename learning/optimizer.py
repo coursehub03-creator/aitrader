@@ -40,6 +40,8 @@ class ParameterSetScore:
 @dataclass(slots=True)
 class OptimizationResult:
     strategy_name: str
+    symbol: str
+    timeframe: str
     best_params: dict[str, Any]
     best_score: float
     tested_combinations: int
@@ -78,6 +80,7 @@ class ParameterOptimizer:
         candles: pd.DataFrame,
         parameter_grid: dict[str, list[Any]],
         symbol: str,
+        timeframe: str,
         fixed_params: dict[str, Any] | None = None,
         keep_top_n: int = 3,
     ) -> OptimizationResult | None:
@@ -129,11 +132,13 @@ class ParameterOptimizer:
         top_n = max(1, min(keep_top_n, len(ranked)))
         selected_candidates = ranked[:top_n]
         best = selected_candidates[0]
-        report_path = self._save_report(strategy.name, symbol, selected_candidates, len(combos))
-        self._update_symbol_best_registry(strategy.name, symbol, best.params, best.robustness_score)
+        report_path = self._save_report(strategy.name, symbol, timeframe, selected_candidates, len(combos))
+        self._update_symbol_best_registry(strategy.name, symbol, timeframe, best.params, best.robustness_score)
 
         return OptimizationResult(
             strategy_name=strategy.name,
+            symbol=symbol.upper(),
+            timeframe=timeframe.upper(),
             best_params=best.params,
             best_score=best.robustness_score,
             best_expectancy=(best.forward.net_pnl / best.forward.trades) if best.forward.trades else 0.0,
@@ -146,43 +151,55 @@ class ParameterOptimizer:
         self,
         strategy_name: str,
         symbol: str,
+        timeframe: str,
         best_params: dict[str, Any],
         best_score: float,
     ) -> None:
-        registry_path = self.report_dir / "best_params_by_symbol.json"
+        symbol_key = symbol.upper()
+        timeframe_key = timeframe.upper()
+        registry_path = self.report_dir / "best_params_by_symbol_timeframe.json"
         if registry_path.exists():
             payload = json.loads(registry_path.read_text(encoding="utf-8"))
         else:
             payload = {}
-        payload.setdefault(symbol, {})
-        payload[symbol][strategy_name] = {"best_params": best_params, "best_score": float(best_score)}
+        payload.setdefault(symbol_key, {})
+        payload[symbol_key].setdefault(timeframe_key, {})
+        payload[symbol_key][timeframe_key][strategy_name] = {"best_params": best_params, "best_score": float(best_score)}
         registry_path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
         self._write_symbol_leaderboard(payload)
 
     def _write_symbol_leaderboard(self, registry: dict[str, Any]) -> None:
         rows: list[dict[str, Any]] = []
-        for symbol, by_strategy in registry.items():
-            if not isinstance(by_strategy, dict):
+        for symbol, by_timeframe in registry.items():
+            if not isinstance(by_timeframe, dict):
                 continue
-            for strategy_name, details in by_strategy.items():
-                if not isinstance(details, dict):
+            for timeframe, by_strategy in by_timeframe.items():
+                if not isinstance(by_strategy, dict):
                     continue
-                rows.append(
-                    {
-                        "symbol": str(symbol).upper(),
-                        "strategy_name": str(strategy_name),
-                        "best_score": float(details.get("best_score", 0.0)),
-                        "best_params": details.get("best_params", {}),
-                    }
-                )
-        leaderboard = sorted(rows, key=lambda item: (item["symbol"], -item["best_score"], item["strategy_name"]))
+                for strategy_name, details in by_strategy.items():
+                    if not isinstance(details, dict):
+                        continue
+                    rows.append(
+                        {
+                            "symbol": str(symbol).upper(),
+                            "timeframe": str(timeframe).upper(),
+                            "strategy_name": str(strategy_name),
+                            "best_score": float(details.get("best_score", 0.0)),
+                            "best_params": details.get("best_params", {}),
+                        }
+                    )
+        leaderboard = sorted(rows, key=lambda item: (item["symbol"], item["timeframe"], -item["best_score"], item["strategy_name"]))
         for idx, row in enumerate(leaderboard):
-            previous_symbol = leaderboard[idx - 1]["symbol"] if idx > 0 else None
-            if row["symbol"] != previous_symbol:
+            previous_key = (
+                leaderboard[idx - 1]["symbol"],
+                leaderboard[idx - 1]["timeframe"],
+            ) if idx > 0 else None
+            current_key = (row["symbol"], row["timeframe"])
+            if current_key != previous_key:
                 rank = 1
             else:
-                rank = int(leaderboard[idx - 1]["symbol_rank"]) + 1
-            row["symbol_rank"] = rank
+                rank = int(leaderboard[idx - 1]["symbol_timeframe_rank"]) + 1
+            row["symbol_timeframe_rank"] = rank
 
         (self.report_dir / "symbol_optimizer_leaderboard.json").write_text(
             json.dumps(leaderboard, indent=2),
@@ -262,14 +279,19 @@ class ParameterOptimizer:
         self,
         strategy_name: str,
         symbol: str,
+        timeframe: str,
         candidates: list[ParameterSetScore],
         tested_combinations: int,
     ) -> Path:
-        safe_symbol = symbol.replace("/", "_")
-        report_path = self.report_dir / f"{strategy_name}_{safe_symbol}_optimization_report.json"
+        safe_symbol = symbol.upper().replace("/", "_")
+        safe_timeframe = timeframe.upper().replace("/", "_")
+        target_dir = self.report_dir / safe_symbol / safe_timeframe
+        target_dir.mkdir(parents=True, exist_ok=True)
+        report_path = target_dir / f"{strategy_name}_optimization_report.json"
         payload = {
             "strategy": strategy_name,
             "symbol": symbol,
+            "timeframe": timeframe,
             "tested_combinations": tested_combinations,
             "selection_policy": {
                 "objective": "maximize robustness_score",
