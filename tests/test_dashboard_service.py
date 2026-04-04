@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from datetime import datetime
 import time
+from types import SimpleNamespace
 
 import pandas as pd
 from core.types import FinalRecommendation, SignalAction
@@ -163,14 +164,20 @@ def test_fetch_historical_data_returns_success_payload(monkeypatch) -> None:
         def __init__(self, *_args, **_kwargs) -> None:
             pass
 
-        def fetch_and_store_days(self, *_args, **_kwargs):
-            frame = pd.DataFrame(
-                [
-                    {"time": "2026-01-01T00:00:00+00:00", "open": 1, "high": 2, "low": 0.5, "close": 1.5, "volume": 100},
-                    {"time": "2026-01-02T00:00:00+00:00", "open": 1, "high": 2, "low": 0.5, "close": 1.5, "volume": 100},
-                ]
+        def fetch_and_store_with_result(self, *_args, **_kwargs):
+            return SimpleNamespace(
+                success=True,
+                status="ok",
+                symbol="EURUSD",
+                timeframe="M5",
+                lookback_days=90,
+                candles_fetched=2,
+                date_start="2026-01-01T00:00:00+00:00",
+                date_end="2026-01-02T00:00:00+00:00",
+                storage_path="data/market_history/EURUSD_M5.csv",
+                last_fetch_time="2026-01-02T00:05:00+00:00",
+                status_message="Fetched 2 candles successfully.",
             )
-            return frame, "data/market_history/EURUSD_M5.csv"
 
     monkeypatch.setattr(dashboard_module, "HistoricalDataPipeline", _FakePipeline)
 
@@ -200,7 +207,7 @@ def test_fetch_historical_data_invalid_lookback_payload(monkeypatch) -> None:
         def __init__(self, *_args, **_kwargs) -> None:
             pass
 
-        def fetch_and_store_days(self, *_args, **_kwargs):
+        def fetch_and_store_with_result(self, *_args, **_kwargs):
             raise ValueError("Unsupported lookback window '10'.")
 
     monkeypatch.setattr(dashboard_module, "HistoricalDataPipeline", _FakePipeline)

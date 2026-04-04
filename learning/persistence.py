@@ -66,6 +66,10 @@ class StorageLayout:
         ):
             path.mkdir(parents=True, exist_ok=True)
 
+    @property
+    def market_history_inventory_path(self) -> Path:
+        return self.market_history_dir / "inventory.csv"
+
 
 class LearningPersistence:
     """Safe storage APIs with SQLite (structured), JSON (active state), and CSV/Parquet (history)."""
@@ -145,6 +149,35 @@ class LearningPersistence:
         csv_path = path.with_suffix(".csv")
         frame.to_csv(csv_path, index=False)
         return csv_path
+
+    def load_market_history_inventory(self) -> pd.DataFrame:
+        return self.safe_read_csv(
+            self.layout.market_history_inventory_path,
+            [
+                "symbol",
+                "timeframe",
+                "candles",
+                "data_start",
+                "data_end",
+                "last_fetch_time",
+                "storage_path",
+                "fetch_status",
+            ],
+        )
+
+    def upsert_market_history_inventory(self, row: dict[str, Any]) -> Path:
+        frame = self.load_market_history_inventory()
+        payload = pd.DataFrame([row])
+        if frame.empty:
+            updated = payload
+        else:
+            key = (str(row.get("symbol", "")).upper(), str(row.get("timeframe", "")).upper())
+            frame["_symbol"] = frame["symbol"].astype(str).str.upper()
+            frame["_timeframe"] = frame["timeframe"].astype(str).str.upper()
+            keep = ~((frame["_symbol"] == key[0]) & (frame["_timeframe"] == key[1]))
+            updated = pd.concat([frame.loc[keep, payload.columns], payload], ignore_index=True)
+        self.safe_write_csv(self.layout.market_history_inventory_path, updated)
+        return self.layout.market_history_inventory_path
 
     def upsert_table(self, table_name: str, frame: pd.DataFrame, if_exists: str = "append") -> None:
         self.layout.db_dir.mkdir(parents=True, exist_ok=True)

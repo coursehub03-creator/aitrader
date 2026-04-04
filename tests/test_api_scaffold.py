@@ -43,6 +43,7 @@ class FakeService:
     def fetch_historical_data(self, symbol: str, timeframe: str, lookback_days: int):
         return {
             "success": True,
+            "status": "ok",
             "symbol": symbol.upper(),
             "timeframe": timeframe.upper(),
             "lookback_days": lookback_days,
@@ -50,6 +51,7 @@ class FakeService:
             "date_start": "2026-01-01T00:00:00+00:00",
             "date_end": "2026-01-02T00:00:00+00:00",
             "storage_path": "data/market_history/EURUSD_M5.csv",
+            "last_fetch_time": "2026-01-02T00:05:00+00:00",
             "status_message": "Fetched 42 candles successfully.",
         }
 
