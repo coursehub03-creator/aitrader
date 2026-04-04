@@ -264,6 +264,11 @@ def render_history_panel(service: DashboardService) -> None:
 
 def render_alerts_panel(service: DashboardService) -> None:
     alerts = prepare_alert_rows(service.recent_alert_events(limit=80), limit=80)
+    summary = service.latest_alert_summary()
+    top = st.columns(2, gap="small")
+    top[0].metric("Last alert sent", summary["last_sent"])
+    top[1].metric("Last alert suppressed", summary["last_suppressed"])
+    st.caption(f"Last suppression reason: {summary['suppression_reason']}")
     st.dataframe(alerts if not alerts.empty else pd.DataFrame([{"info": "No alerts yet"}]), use_container_width=True, hide_index=True, height=320)
     st.caption(
         f"Telegram status: {st.session_state.latest_alert_status} | "
