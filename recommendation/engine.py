@@ -383,14 +383,35 @@ class RecommendationEngine:
             reasons.append(f"Session effect: {session_reason}")
 
         names: list[str] = []
+        historical_scores = self._load_historical_scores(symbol, timeframe)
+        recent_scores = self._load_recent_paper_scores(symbol, timeframe)
+        score_weights = self._quality_score_weights()
+        min_historical_score = float(self.settings.get("recommendation.min_historical_score", 40.0))
+        reject_poor_historical = bool(self.settings.get("recommendation.reject_on_poor_historical", False))
+        poor_hist_multiplier = max(0.0, min(1.0, float(self.settings.get("recommendation.poor_historical_confidence_multiplier", 0.7))))
         weak_cutoff = float(self.settings.get("learning.weak_strategy_score_cutoff", 1.0))
         weak_reduction = max(0.0, float(self.settings.get("learning.weak_strategy_confidence_multiplier", 0.75)))
 
         strategy_scores: list[float] = []
         recent_performance_scores: list[float] = []
+        selected_historical_scores: list[float] = []
+        selected_recent_scores: list[float] = []
+        selected_combined_scores: list[float] = []
 
         for signal, score in selected:
             perf_weight = 1.0
+            historical_score = historical_scores.get(signal.strategy_name)
+            recent_score = recent_scores.get(signal.strategy_name)
+            if historical_score is not None and historical_score < min_historical_score:
+                if reject_poor_historical:
+                    reasons.append(
+                        f"{signal.strategy_name} rejected due to historical score {historical_score:.2f} < {min_historical_score:.2f}"
+                    )
+                    continue
+                perf_weight *= poor_hist_multiplier
+                reasons.append(
+                    f"{signal.strategy_name} confidence reduced due to historical score {historical_score:.2f} < {min_historical_score:.2f}"
+                )
             if score is not None and score.score < weak_cutoff:
                 if score.score <= 0:
                     reasons.append(f"{signal.strategy_name} excluded due to weak recent performance score={score.score:.2f}")
@@ -405,6 +426,21 @@ class RecommendationEngine:
             tp_vals.append(signal.take_profit)
             reasons.append(f"{signal.strategy_name}: {signal.reason}")
             names.append(signal.strategy_name)
+            current_quality_score = float(signal.confidence * 100.0)
+            combined_score = self._compute_combined_score(
+                current_quality_score=current_quality_score,
+                historical_score=historical_score,
+                recent_score=recent_score,
+                weights=score_weights,
+            )
+            selected_combined_scores.append(combined_score)
+            reasons.append(
+                f"{signal.strategy_name} diagnostics: current={current_quality_score:.2f}, historical={self._fmt_optional(historical_score)}, recent={self._fmt_optional(recent_score)}, combined={combined_score:.2f}"
+            )
+            if historical_score is not None:
+                selected_historical_scores.append(float(historical_score))
+            if recent_score is not None:
+                selected_recent_scores.append(float(recent_score))
             if score is not None:
                 strategy_scores.append(float(score.score))
                 recent_performance_scores.append(float(score.win_rate))
@@ -449,6 +485,9 @@ class RecommendationEngine:
             signal_strength=signal_strength,
             strategy_score=(sum(strategy_scores) / len(strategy_scores)) if strategy_scores else None,
             recent_performance_score=(sum(recent_performance_scores) / len(recent_performance_scores)) if recent_performance_scores else None,
+            historical_score=(sum(selected_historical_scores) / len(selected_historical_scores)) if selected_historical_scores else None,
+            recent_score=(sum(selected_recent_scores) / len(selected_recent_scores)) if selected_recent_scores else None,
+            combined_score=(sum(selected_combined_scores) / len(selected_combined_scores)) if selected_combined_scores else None,
             volatility_state=volatility_state,
             next_relevant_news_event=next_relevant_news_event,
             next_relevant_news_countdown=self._format_news_countdown(next_relevant_news_event),
@@ -613,6 +652,9 @@ class RecommendationEngine:
             f"║ Risk/Reward       : {recommendation.risk_reward:.2f}",
             f"║ Confidence        : {recommendation.confidence:.2%}",
             f"║ Signal Strength   : {getattr(recommendation, 'signal_strength', 'weak')}",
+            f"║ Historical Score  : {RecommendationEngine._fmt_optional(getattr(recommendation, 'historical_score', None))}",
+            f"║ Recent Score      : {RecommendationEngine._fmt_optional(getattr(recommendation, 'recent_score', None))}",
+            f"║ Combined Score    : {RecommendationEngine._fmt_optional(getattr(recommendation, 'combined_score', None))}",
             f"║ Volatility State  : {getattr(recommendation, 'volatility_state', 'normal')}",
             f"║ Rejection Reason  : {getattr(recommendation, 'rejection_reason', None) or 'n/a'}",
             f"║ News Effect       : {news_effect}",
@@ -625,3 +667,84 @@ class RecommendationEngine:
     def _persist_signal(self, symbol: str, signal: StrategySignal) -> None:
         with self.results_path.open("a", encoding="utf-8") as handle:
             handle.write(json.dumps({"symbol": symbol, "strategy": signal.strategy_name, "action": signal.action, "entry": signal.entry, "stop_loss": signal.stop_loss, "take_profit": signal.take_profit, "confidence": signal.confidence, "reason": signal.reason, "metadata": signal.metadata}) + "\n")
+
+    def _load_historical_scores(self, symbol: str, timeframe: str) -> dict[str, float]:
+        path = Path("state") / "best_params" / f"{symbol.upper()}_{timeframe.upper()}.json"
+        try:
+            payload = json.loads(path.read_text(encoding="utf-8"))
+        except (FileNotFoundError, json.JSONDecodeError, OSError, TypeError):
+            return {}
+        if not isinstance(payload, dict):
+            return {}
+        out: dict[str, float] = {}
+        for strategy_name, item in payload.items():
+            if not isinstance(item, dict):
+                continue
+            raw = item.get("historical_score")
+            if raw is None:
+                continue
+            try:
+                out[str(strategy_name)] = float(raw)
+            except (TypeError, ValueError):
+                continue
+        return out
+
+    def _load_recent_paper_scores(self, symbol: str, timeframe: str) -> dict[str, float]:
+        path = Path("logs/paper_trades.csv")
+        if not path.exists():
+            return {}
+        try:
+            frame = pd.read_csv(path)
+        except Exception:
+            return {}
+        if frame.empty:
+            return {}
+        symbol_col = frame.get("symbol")
+        timeframe_col = frame.get("timeframe")
+        strategy_col = frame.get("strategy")
+        if symbol_col is None or timeframe_col is None or strategy_col is None:
+            return {}
+        scoped = frame[
+            symbol_col.astype(str).str.upper().eq(symbol.upper())
+            & timeframe_col.astype(str).str.upper().eq(timeframe.upper())
+        ].copy()
+        if scoped.empty:
+            return {}
+        recent_trade_window = int(self.settings.get("recommendation.recent_score_trade_window", 30))
+        scored: dict[str, float] = {}
+        for name, group in scoped.groupby(strategy_col.astype(str)):
+            latest = group.tail(recent_trade_window)
+            wins = pd.to_numeric(latest.get("is_win"), errors="coerce").fillna(0.0)
+            score = float(wins.mean() * 100.0) if not wins.empty else 0.0
+            scored[str(name)] = score
+        return scored
+
+    def _quality_score_weights(self) -> dict[str, float]:
+        current = float(self.settings.get("recommendation.quality_weight_current_signal", 0.5))
+        historical = float(self.settings.get("recommendation.quality_weight_historical_score", 0.3))
+        recent = float(self.settings.get("recommendation.quality_weight_recent_score", 0.2))
+        return {"current": current, "historical": historical, "recent": recent}
+
+    @staticmethod
+    def _compute_combined_score(
+        *,
+        current_quality_score: float,
+        historical_score: float | None,
+        recent_score: float | None,
+        weights: dict[str, float],
+    ) -> float:
+        components = [("current", current_quality_score)]
+        if historical_score is not None:
+            components.append(("historical", historical_score))
+        if recent_score is not None:
+            components.append(("recent", recent_score))
+        weight_sum = sum(max(0.0, float(weights.get(name, 0.0))) for name, _ in components)
+        if weight_sum <= 0:
+            return float(current_quality_score)
+        return float(sum(value * (max(0.0, float(weights.get(name, 0.0))) / weight_sum) for name, value in components))
+
+    @staticmethod
+    def _fmt_optional(value: float | None) -> str:
+        if value is None:
+            return "n/a"
+        return f"{float(value):.2f}"
