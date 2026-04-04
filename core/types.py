@@ -109,6 +109,9 @@ class FinalRecommendation:
     signal_strength: str = "weak"
     strategy_score: float | None = None
     recent_performance_score: float | None = None
+    historical_score: float | None = None
+    recent_score: float | None = None
+    combined_score: float | None = None
     alert_quality_score: float | None = None
     rejection_reason: str | None = None
     volatility_state: str = "normal"

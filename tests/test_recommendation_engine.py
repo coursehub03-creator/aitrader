@@ -1,5 +1,6 @@
 from dataclasses import dataclass
 from datetime import datetime, timedelta
+import json
 
 import pandas as pd
 
@@ -35,9 +36,9 @@ def _engine() -> RecommendationEngine:
 def test_active_strategy_names_respects_top_count_when_optimized() -> None:
     engine = _engine()
     ranked = {
-        "s1": OptimizationResult("s1", {}, 2.0, 4, [], "r1"),
-        "s2": OptimizationResult("s2", {}, 4.0, 4, [], "r2"),
-        "s3": OptimizationResult("s3", {}, 1.0, 4, [], "r3"),
+        "s1": OptimizationResult("s1", "EURUSD", "M5", {}, 2.0, 4, [], "r1"),
+        "s2": OptimizationResult("s2", "EURUSD", "M5", {}, 4.0, 4, [], "r2"),
+        "s3": OptimizationResult("s3", "EURUSD", "M5", {}, 1.0, 4, [], "r3"),
     }
 
     selected = engine._active_strategy_names(ranked, active_count=2, optimization_enabled=True)
@@ -187,7 +188,7 @@ def _build_engine_with_market_status(status: str, reason: str = "") -> Recommend
 def test_generate_market_open_status() -> None:
     engine = _build_engine_with_market_status("open", "market is open")
     signal = StrategySignal("test_strategy", SignalAction.BUY, 1.11, 1.1, 1.13, 0.75, ["trend up"])
-    engine._run_strategies = lambda symbol, candles: [(signal, None)]  # type: ignore[method-assign]
+    engine._run_strategies = lambda symbol, timeframe, candles: [(signal, None)]  # type: ignore[method-assign]
 
     rec = engine.generate("EURUSD", "M5")
 
@@ -292,6 +293,9 @@ def test_final_recommendation_has_operator_output_fields() -> None:
         "signal_strength",
         "strategy_score",
         "recent_performance_score",
+        "historical_score",
+        "recent_score",
+        "combined_score",
         "alert_quality_score",
         "rejection_reason",
         "volatility_state",
@@ -365,6 +369,8 @@ def test_generate_does_not_crash_when_optimizer_has_no_trade_history() -> None:
         {
             "optimize": lambda self, *_args, **_kwargs: OptimizationResult(
                 strategy_name="trend_rsi",
+                symbol="EURUSD",
+                timeframe="M5",
                 best_params={},
                 best_score=1.0,
                 tested_combinations=1,
@@ -398,6 +404,53 @@ def test_aggregate_rejects_low_risk_reward() -> None:
 
     assert rec.action == SignalAction.NO_TRADE
     assert "risk/reward" in (rec.rejection_reason or "").lower()
+
+
+def test_aggregate_combines_current_historical_and_recent_scores(monkeypatch, tmp_path) -> None:
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "state" / "best_params").mkdir(parents=True, exist_ok=True)
+    (tmp_path / "logs").mkdir(parents=True, exist_ok=True)
+    (tmp_path / "state" / "best_params" / "EURUSD_M5.json").write_text(
+        json.dumps({"trend_rsi": {"historical_score": 80.0}}), encoding="utf-8"
+    )
+    pd.DataFrame(
+        [
+            {"symbol": "EURUSD", "timeframe": "M5", "strategy": "trend_rsi", "is_win": 1},
+            {"symbol": "EURUSD", "timeframe": "M5", "strategy": "trend_rsi", "is_win": 0},
+        ]
+    ).to_csv(tmp_path / "logs" / "paper_trades.csv", index=False)
+
+    engine = _engine()
+    engine.settings = {
+        "recommendation.quality_weight_current_signal": 0.5,
+        "recommendation.quality_weight_historical_score": 0.3,
+        "recommendation.quality_weight_recent_score": 0.2,
+    }
+    signal = StrategySignal("trend_rsi", SignalAction.BUY, 1.25, 1.24, 1.27, 0.8, ["trend aligned"])
+    rec = engine._aggregate("EURUSD", "M5", [(signal, None)], market_price=1.251)
+
+    assert rec.historical_score == 80.0
+    assert rec.recent_score == 50.0
+    assert rec.combined_score == 74.0
+
+
+def test_aggregate_rejects_trade_when_historical_score_is_poor(monkeypatch, tmp_path) -> None:
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "state" / "best_params").mkdir(parents=True, exist_ok=True)
+    (tmp_path / "state" / "best_params" / "EURUSD_M5.json").write_text(
+        json.dumps({"trend_rsi": {"historical_score": 25.0}}), encoding="utf-8"
+    )
+
+    engine = _engine()
+    engine.settings = {
+        "recommendation.reject_on_poor_historical": True,
+        "recommendation.min_historical_score": 40.0,
+    }
+    signal = StrategySignal("trend_rsi", SignalAction.BUY, 1.25, 1.24, 1.27, 0.8, ["trend aligned"])
+    rec = engine._aggregate("EURUSD", "M5", [(signal, None)], market_price=1.251)
+
+    assert rec.action == SignalAction.NO_TRADE
+    assert "no strategies available after aggregation" in rec.reasons[0].lower()
 
 
 def test_news_gate_blocks_when_high_impact_within_30_minutes() -> None:

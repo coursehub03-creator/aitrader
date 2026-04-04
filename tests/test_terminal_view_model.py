@@ -72,6 +72,18 @@ def test_prepare_recommendation_panel_blocked_state() -> None:
     assert panel["state"] == "blocked"
 
 
+def test_prepare_recommendation_panel_includes_score_fields() -> None:
+    recommendation = _rec()
+    recommendation.historical_score = 70.0
+    recommendation.recent_score = 62.0
+    recommendation.combined_score = 66.4
+    panel = prepare_recommendation_panel(recommendation)
+    values = dict(panel["fields"])
+    assert values["historical_score"] == "70.00"
+    assert values["recent_score"] == "62.00"
+    assert values["combined_score"] == "66.40"
+
+
 def test_prepare_alert_rows_for_empty_and_populated_frames() -> None:
     assert prepare_alert_rows(pd.DataFrame()).empty
     frame = pd.DataFrame([

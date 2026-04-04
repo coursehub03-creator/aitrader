@@ -81,6 +81,13 @@ learning:
 recommendation:
   min_confidence: 0.6
   min_risk_reward: 1.5
+  quality_weight_current_signal: 0.5
+  quality_weight_historical_score: 0.3
+  quality_weight_recent_score: 0.2
+  min_historical_score: 40.0
+  reject_on_poor_historical: false
+  poor_historical_confidence_multiplier: 0.7
+  recent_score_trade_window: 30
   spread:
     default_threshold: 25
     elevated_ratio: 0.75
