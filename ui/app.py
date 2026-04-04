@@ -389,18 +389,47 @@ def render_market_visuals(service: DashboardService, state, recommendation: Fina
 
 
 def render_self_learning_center(service: DashboardService) -> None:
-    st.markdown("### Historical Data Ingestion")
-    c1, c2, c3, c4 = st.columns([1.0, 1.0, 1.0, 1.2], gap="small")
-    st.session_state.history_fetch_symbol = c1.selectbox("History Symbol", COMMON_SYMBOLS, index=COMMON_SYMBOLS.index(st.session_state.history_fetch_symbol) if st.session_state.history_fetch_symbol in COMMON_SYMBOLS else 0)
-    st.session_state.history_fetch_timeframe = c2.selectbox("History Timeframe", TIMEFRAMES, index=TIMEFRAMES.index(st.session_state.history_fetch_timeframe) if st.session_state.history_fetch_timeframe in TIMEFRAMES else 1)
-    st.session_state.history_fetch_lookback_days = c3.selectbox("Lookback Range", LOOKBACK_OPTIONS, index=LOOKBACK_OPTIONS.index(int(st.session_state.history_fetch_lookback_days)) if int(st.session_state.history_fetch_lookback_days) in LOOKBACK_OPTIONS else 1)
-    fetch_clicked = c4.button("Fetch Historical Data", type="primary", use_container_width=True)
+    st.markdown("### Historical Learning Workflow")
+    st.caption("Run end-to-end historical learning for a selected symbol/timeframe and inspect outcomes below.")
+
+    controls = st.columns([1.0, 1.0, 1.0, 1.1, 1.15, 1.1], gap="small")
+    st.session_state.history_fetch_symbol = controls[0].selectbox(
+        "Symbol",
+        COMMON_SYMBOLS,
+        index=COMMON_SYMBOLS.index(st.session_state.history_fetch_symbol) if st.session_state.history_fetch_symbol in COMMON_SYMBOLS else 0,
+        key="historical_learning_symbol",
+    )
+    st.session_state.history_fetch_timeframe = controls[1].selectbox(
+        "Timeframe",
+        TIMEFRAMES,
+        index=TIMEFRAMES.index(st.session_state.history_fetch_timeframe) if st.session_state.history_fetch_timeframe in TIMEFRAMES else 1,
+        key="historical_learning_timeframe",
+    )
+    st.session_state.history_fetch_lookback_days = controls[2].selectbox(
+        "Lookback Range",
+        LOOKBACK_OPTIONS,
+        index=LOOKBACK_OPTIONS.index(int(st.session_state.history_fetch_lookback_days)) if int(st.session_state.history_fetch_lookback_days) in LOOKBACK_OPTIONS else 1,
+        key="historical_learning_lookback",
+    )
+    fetch_clicked = controls[3].button("Fetch Historical Data", type="primary", use_container_width=True, key="fetch_historical_data_action")
+    validate_clicked = controls[4].button("Run Historical Validation", use_container_width=True, key="run_historical_validation_action")
+    optimize_clicked = controls[5].button("Run Symbol Optimizer", use_container_width=True, key="run_symbol_optimizer_action")
+
     if fetch_clicked:
         with st.spinner("Fetching historical candles from MT5..."):
             st.session_state.history_fetch_result = service.fetch_historical_data(
                 st.session_state.history_fetch_symbol,
                 st.session_state.history_fetch_timeframe,
                 int(st.session_state.history_fetch_lookback_days),
+            )
+    if validate_clicked:
+        with st.spinner("Running historical validation over stored history..."):
+            st.session_state.validation_output = service.run_historical_validation()
+    if optimize_clicked:
+        with st.spinner("Running symbol optimizer..."):
+            st.session_state.optimizer_output = service.run_optimizer(
+                st.session_state.history_fetch_symbol,
+                st.session_state.history_fetch_timeframe,
             )
 
     fetch_result = st.session_state.history_fetch_result or {}
@@ -411,16 +440,82 @@ def render_self_learning_center(service: DashboardService) -> None:
         else:
             st.warning(message)
 
-    st.markdown("### History Inventory")
-    inventory = service.historical_data_summary()
-    st.dataframe(
-        inventory if not inventory.empty else pd.DataFrame([{"info": "No historical datasets stored yet"}]),
-        use_container_width=True,
-        hide_index=True,
-        height=220,
-    )
-
     payload = service.learning_center_payload()
+    inventory = service.historical_data_summary()
+    has_history = not inventory.empty
+
+    st.markdown("### Historical Learning Panels")
+    row_a, row_b = st.columns(2, gap="small")
+    with row_a:
+        st.markdown("#### Stored Historical Datasets")
+        if has_history:
+            st.dataframe(inventory, use_container_width=True, hide_index=True, height=240)
+        else:
+            st.info("No historical datasets stored yet. Fetch historical data to initialize learning.")
+    with row_b:
+        st.markdown("#### Validation Summaries")
+        historical = payload["historical_validation"]
+        if not historical.empty:
+            summary = (
+                historical.groupby(["symbol", "timeframe"], dropna=False)
+                .agg(
+                    rows=("strategy", "count"),
+                    top_strategy=("strategy", "first"),
+                    best_score=("final_validation_score", "max"),
+                    avg_score=("final_validation_score", "mean"),
+                )
+                .reset_index()
+            )
+            st.dataframe(summary, use_container_width=True, hide_index=True, height=240)
+        else:
+            st.info("No validation summaries yet. Run Historical Validation after storing history.")
+
+    row_c, row_d = st.columns(2, gap="small")
+    with row_c:
+        st.markdown("#### Top Strategies")
+        historical = payload["historical_validation"]
+        if not historical.empty:
+            top_strategies = (
+                historical.groupby("strategy", dropna=False)
+                .agg(
+                    best_score=("final_validation_score", "max"),
+                    avg_score=("final_validation_score", "mean"),
+                    rows=("strategy", "count"),
+                )
+                .reset_index()
+                .sort_values(["best_score", "avg_score"], ascending=False)
+            )
+            st.dataframe(top_strategies, use_container_width=True, hide_index=True, height=240)
+        else:
+            st.info("No strategy rankings yet. Validation results will populate this panel.")
+    with row_d:
+        st.markdown("#### Top Parameter Sets")
+        best_config_panel = payload.get("best_config", pd.DataFrame())
+        if isinstance(best_config_panel, pd.DataFrame) and not best_config_panel.empty:
+            score_col = "combined_score" if "combined_score" in best_config_panel.columns else "historical_score"
+            if score_col in best_config_panel.columns:
+                best_config_panel = best_config_panel.sort_values(score_col, ascending=False)
+            st.dataframe(best_config_panel.head(25), use_container_width=True, hide_index=True, height=240)
+        else:
+            st.info("No top parameter sets yet. Run optimizer/validation to save best configs.")
+
+    st.markdown("#### Historical Score by Symbol")
+    historical = payload["historical_validation"]
+    if not historical.empty:
+        score_by_symbol = (
+            historical.groupby("symbol", dropna=False)
+            .agg(
+                best_validation_score=("final_validation_score", "max"),
+                average_validation_score=("final_validation_score", "mean"),
+                strategy_rows=("strategy", "count"),
+            )
+            .reset_index()
+            .sort_values("best_validation_score", ascending=False)
+        )
+        st.dataframe(score_by_symbol, use_container_width=True, hide_index=True, height=210)
+    else:
+        st.info("No historical score data available by symbol yet.")
+
     render_learning_health(payload)
     optimizer_board = service.optimizer_leaderboard_by_symbol()
     latest_optimizer = st.session_state.optimizer_output if "optimizer_output" in st.session_state else pd.DataFrame()
