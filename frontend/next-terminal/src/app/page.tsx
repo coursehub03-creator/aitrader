@@ -34,19 +34,24 @@ function TerminalPage() {
   return (
     <main className="terminal-grid">
       <LanguageSwitcher />
+
       <section className="panel watchlist">
         <WatchlistPanel />
       </section>
+
       <section className="panel workspace">
         <LiveChartWorkspace />
       </section>
+
       <section className="panel recommendations">
         <RecommendationSidePanel />
       </section>
+
       <section className="bottom">
         <div className="panel">
           <AlertsHistoryPanel />
         </div>
+
         <div className="panel">
           <LearningCenterPanel />
         </div>
