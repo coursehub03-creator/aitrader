@@ -179,8 +179,9 @@ def render_status_strip(recommendation: FinalRecommendation | None, symbol: str,
         signal_strength=signal,
         current_price=float(snapshots.get(symbol, {}).get("last_price", 0.0)),
     )
-    html = "".join([f"<div class='terminal-pill'><div class='terminal-k'>{k}</div><div class='terminal-v'>{v}</div></div>" for k, v in rows])
-    st.markdown(f"<div class='terminal-strip'>{html}</div>", unsafe_allow_html=True)
+    status_cols = st.columns(len(rows), gap="small")
+    for idx, (k, v) in enumerate(rows):
+        status_cols[idx].metric(k, v)
 
 
 def render_watchlist(service: DashboardService, symbols: list[str], timeframe: str, recommendations: dict[str, FinalRecommendation]) -> tuple[pd.DataFrame, dict[str, dict]]:
@@ -246,8 +247,12 @@ def render_chart(service: DashboardService, symbol: str, timeframe: str, recomme
 
 def render_recommendation_panel(recommendation: FinalRecommendation | None) -> None:
     panel = prepare_recommendation_panel(recommendation)
-    cls = "rec-active" if panel["state"] == "active" else "rec-blocked"
-    st.markdown(f"<div class='rec-card {cls}'><div class='small-muted'>Current Recommendation</div><h3 style='margin-top:0.2rem'>{panel['title']}</h3></div>", unsafe_allow_html=True)
+    is_active = panel["state"] == "active"
+    st.caption("Current Recommendation")
+    if is_active:
+        st.success(panel["title"])
+    else:
+        st.warning(panel["title"])
     for k, v in panel["fields"]:
         st.metric(k.replace("_", " ").title(), v)
     if panel.get("rejection_reason"):
